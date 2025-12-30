@@ -130,15 +130,29 @@ class XtreamCodesService:
         """
         # Get tokenized URL (m3u8 is standard for live TV)
         # Live TV also needs token extraction for authentication
+        print(f"DEBUG get_live_stream_url: Starting token extraction for stream_id={stream_id}")
         url_with_token = self.get_stream_url_with_token(stream_id, "live", "m3u8")
+        print(f"DEBUG get_live_stream_url: Token extraction result: {url_with_token[:200] if url_with_token else 'None'}...")
+        print(f"DEBUG get_live_stream_url: Has token in result: {url_with_token is not None and 'token=' in (url_with_token or '')}")
+        
+        # If token extraction failed or returned URL without token, use base URL
+        if not url_with_token or 'token=' not in url_with_token:
+            print(f"⚠️ WARNING: Token extraction failed for live stream {stream_id}")
+            print(f"DEBUG get_live_stream_url: url_with_token value: {url_with_token}")
+            final_url = f"{self.base_url}/live/{self.username}/{self.password}/{stream_id}.m3u8"
+            has_token = False
+        else:
+            final_url = url_with_token
+            has_token = True
+            print(f"✅ Using tokenized URL for live stream {stream_id}")
         
         return [{
-            "url": url_with_token or f"{self.base_url}/live/{self.username}/{self.password}/{stream_id}.m3u8",
+            "url": final_url,
             "format": "m3u8",
             "type": "HLS",
             "quality": "adaptive",
             "is_direct": False,
-            "has_token": url_with_token is not None and 'token=' in (url_with_token or '')
+            "has_token": has_token
         }]
     
     def get_epg(self, stream_id: str = None) -> Dict[str, Any]:
@@ -390,6 +404,7 @@ class XtreamCodesService:
         try:
             # Make GET request to get token via redirect
             # Note: Using GET (not HEAD) as some servers don't return Location header in HEAD requests
+            print(f"DEBUG get_stream_url_with_token: Making request to {base_url}")
             response = self.session.get(
                 base_url,
                 allow_redirects=False,
@@ -399,24 +414,34 @@ class XtreamCodesService:
                     'Accept': '*/*',
                 }
             )
+            print(f"DEBUG get_stream_url_with_token: Response status: {response.status_code}")
+            print(f"DEBUG get_stream_url_with_token: Response headers: {dict(response.headers)}")
             
             # If we get a redirect (302), extract token from Location header
             if response.status_code == 302:
                 location = response.headers.get('Location', '')
+                print(f"DEBUG: Got 302 redirect for {stream_id} ({stream_type})")
+                print(f"DEBUG: Location header: {location[:150] if location else 'None'}...")
                 if location and 'token=' in location:
                     # IMPORTANT: Use the Location URL as-is (it may be a different IP)
                     # The redirect URL is already complete and absolute
                     if location.startswith('http://') or location.startswith('https://'):
                         print(f"✅ Token extracted successfully for {stream_id} ({stream_type})")
+                        print(f"DEBUG: Returning tokenized URL: {location[:150]}...")
+                        response.close()  # Close response before returning
                         return location
                     else:
                         # Relative URL, make it absolute based on original request URL
                         from urllib.parse import urlparse, urljoin
                         absolute_location = urljoin(base_url, location)
                         print(f"✅ Token extracted successfully (relative) for {stream_id} ({stream_type})")
+                        print(f"DEBUG: Returning absolute tokenized URL: {absolute_location[:150]}...")
+                        response.close()  # Close response before returning
                         return absolute_location
                 else:
                     print(f"⚠️ Redirect received but no token in Location header for {stream_id} ({stream_type})")
+                    print(f"DEBUG: Location value: {location}")
+                response.close()  # Close response
             elif response.status_code == 200:
                 # Some servers return 200 with token in response body or headers
                 # Check if token is in response headers
@@ -452,6 +477,7 @@ class XtreamCodesService:
             
             # If no redirect or no token, return base URL (fallback)
             print(f"⚠️ No token extracted for {stream_id} ({stream_type}), using base URL")
+            print(f"DEBUG get_stream_url_with_token: Final response status was: {response.status_code if 'response' in locals() else 'N/A'}")
             return base_url
             
         except Exception as e:
