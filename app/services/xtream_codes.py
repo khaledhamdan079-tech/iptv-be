@@ -382,6 +382,63 @@ class XtreamCodesService:
         else:
             return f"{self.base_url}/live/{self.username}/{self.password}/{stream_id}.{ext}"
     
+    def get_stream_url_with_token(self, stream_id: str, stream_type: str = "movie", extension: str = None) -> Optional[str]:
+        """
+        Get stream URL with token for playback (as used by APK)
+        
+        The token is obtained by making a GET request to the stream URL,
+        which returns a 302 redirect with the token in the Location header.
+        
+        Important: The redirect may point to a different IP address than the base URL.
+        Example: Request to ddgo770.live:2095 redirects to 194.76.0.168:2095 with token.
+        We must use the full URL from the Location header as-is.
+        
+        Args:
+            stream_id: Stream ID
+            stream_type: Type of stream (movie, series, live, etc.)
+            extension: File extension (m3u8, ts, etc.). If None, uses default or container_extension
+        
+        Returns:
+            Stream URL with token, or None if token cannot be obtained
+        """
+        # First, construct the base URL without token
+        base_url = self.get_stream_url(stream_id, stream_type, extension)
+        
+        try:
+            # Make GET request to get token via redirect
+            # Note: Using GET (not HEAD) as some servers don't return Location header in HEAD requests
+            response = self.session.get(
+                base_url,
+                allow_redirects=False,
+                timeout=5,
+                headers={
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                    'Accept': '*/*',
+                }
+            )
+            
+            # If we get a redirect (302), extract token from Location header
+            if response.status_code == 302:
+                location = response.headers.get('Location', '')
+                if location and 'token=' in location:
+                    # IMPORTANT: Use the Location URL as-is (it may be a different IP)
+                    # The redirect URL is already complete and absolute
+                    if location.startswith('http://') or location.startswith('https://'):
+                        return location
+                    else:
+                        # Relative URL, make it absolute based on original request URL
+                        from urllib.parse import urlparse, urljoin
+                        return urljoin(base_url, location)
+            
+            # If no redirect or no token, return base URL (fallback)
+            return base_url
+            
+        except Exception as e:
+            # If token extraction fails, return base URL without token
+            # Log error for debugging but don't fail
+            print(f"Warning: Could not extract token for {base_url}: {e}")
+            return base_url
+    
     def get_movie_stream_url(self, movie: Dict[str, Any] = None, stream_id: str = None) -> List[Dict[str, str]]:
         """
         Get all possible stream URLs for a movie with metadata
@@ -439,13 +496,17 @@ class XtreamCodesService:
         
         # IMPORTANT: Prioritize container_extension (e.g., mp4) over m3u8
         # Testing shows .mp4 works but .m3u8 returns empty HTML
+        # APK uses MP4 URLs with token parameter for authentication
         if container_ext and container_ext not in ['m3u8', 'ts']:
+            # Try to get URL with token (as APK does)
+            url_with_token = self.get_stream_url_with_token(stream_id, "movie", container_ext)
             urls.append({
-                "url": f"{self.base_url}/movie/{self.username}/{self.password}/{stream_id}.{container_ext}",
+                "url": url_with_token or f"{self.base_url}/movie/{self.username}/{self.password}/{stream_id}.{container_ext}",
                 "format": container_ext,
                 "type": "video" if container_ext in ['mp4', 'mkv', 'avi'] else "direct",
                 "quality": "original",
-                "is_direct": False
+                "is_direct": False,
+                "has_token": url_with_token is not None and 'token=' in (url_with_token or '')
             })
         
         # Note: Segments-based m3u8 will be added by the route handler
@@ -501,13 +562,17 @@ class XtreamCodesService:
         
         # IMPORTANT: Prioritize container_extension (e.g., mp4) over m3u8
         # Testing shows .mp4 works but .m3u8 returns empty HTML
+        # APK uses MP4 URLs with token parameter for authentication
         if container_ext and container_ext not in ['m3u8', 'ts']:
+            # Try to get URL with token (as APK does)
+            url_with_token = self.get_stream_url_with_token(episode_id, "series", container_ext)
             urls.append({
-                "url": f"{self.base_url}/series/{self.username}/{self.password}/{episode_id}.{container_ext}",
+                "url": url_with_token or f"{self.base_url}/series/{self.username}/{self.password}/{episode_id}.{container_ext}",
                 "format": container_ext,
                 "type": "video" if container_ext in ['mp4', 'mkv', 'avi'] else "direct",
                 "quality": "original",
-                "is_direct": False
+                "is_direct": False,
+                "has_token": url_with_token is not None and 'token=' in (url_with_token or '')
             })
         
         # Note: Segments-based m3u8 will be added by the route handler

@@ -558,8 +558,12 @@ async def get_movie_stream_url(
         "is_segments_based": True
     })
     
-    # Find recommended URL (prioritize: direct_source, then container_ext like mp4, then segments m3u8, then direct m3u8)
+    # Find recommended URL (prioritize: direct_source, then container_ext with token, then container_ext, then segments m3u8, then direct m3u8)
     recommended = next((url for url in stream_urls if url.get('is_direct')), None)
+    if not recommended:
+        # Prefer container_extension (mp4, etc.) with token (as APK uses)
+        recommended = next((url for url in stream_urls 
+                           if url.get('format') not in ['m3u8', 'ts'] and url.get('type') == 'video' and url.get('has_token')), None)
     if not recommended:
         # Prefer container_extension (mp4, etc.) over m3u8
         recommended = next((url for url in stream_urls 
@@ -652,8 +656,12 @@ async def get_episode_stream_url(
         "is_segments_based": True
     })
     
-    # Find recommended URL (prioritize: direct_source, then container_ext like mp4, then segments m3u8, then direct m3u8)
+    # Find recommended URL (prioritize: direct_source, then container_ext with token, then container_ext, then segments m3u8, then direct m3u8)
     recommended = next((url for url in stream_urls if url.get('is_direct')), None)
+    if not recommended:
+        # Prefer container_extension (mp4, etc.) with token (as APK uses)
+        recommended = next((url for url in stream_urls 
+                           if url.get('format') not in ['m3u8', 'ts'] and url.get('type') == 'video' and url.get('has_token')), None)
     if not recommended:
         # Prefer container_extension (mp4, etc.) over m3u8
         recommended = next((url for url in stream_urls 
