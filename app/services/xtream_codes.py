@@ -410,7 +410,7 @@ class XtreamCodesService:
             response = self.session.get(
                 base_url,
                 allow_redirects=False,
-                timeout=5,
+                timeout=15,  # Increased from 5 to 15 seconds for slow servers
                 headers={
                     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
                     'Accept': '*/*',

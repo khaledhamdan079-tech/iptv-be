@@ -659,7 +659,7 @@ async def proxy_stream(
         initial_response = service.session.get(
             url,
             stream=False,
-            timeout=10,
+            timeout=30,  # Increased from 10 to 30 seconds for slow servers
             allow_redirects=False,
             headers=initial_headers
         )
@@ -721,7 +721,7 @@ async def proxy_stream(
         response = service.session.get(
             url,
             stream=True,
-            timeout=30,
+            timeout=60,  # Increased from 30 to 60 seconds for slow streaming servers
             allow_redirects=True,
             headers=stream_headers
         )
