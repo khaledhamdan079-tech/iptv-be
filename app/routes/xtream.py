@@ -845,13 +845,63 @@ async def proxy_stream(
         # Forward the stream
         def generate():
             try:
-                # If we read first chunk, yield it first
-                if first_chunk:
-                    yield first_chunk
-                
-                for chunk in response.iter_content(chunk_size=8192):
-                    if chunk:
-                        yield chunk
+                # For m3u8 playlists, we need to rewrite relative URLs to absolute URLs
+                # This ensures TS segments can be fetched correctly
+                if is_m3u8:
+                    # Read the entire playlist (m3u8 files are typically small)
+                    playlist_content = first_chunk if first_chunk else b''
+                    for chunk in response.iter_content(chunk_size=8192):
+                        if chunk:
+                            playlist_content += chunk
+                    
+                    # Decode and rewrite URLs
+                    try:
+                        playlist_text = playlist_content.decode('utf-8')
+                        lines = playlist_text.split('\n')
+                        rewritten_lines = []
+                        
+                        from urllib.parse import urljoin, urlparse
+                        base_parsed = urlparse(url)
+                        base_url_for_join = f"{base_parsed.scheme}://{base_parsed.netloc}{'/'.join(base_parsed.path.split('/')[:-1])}/"
+                        
+                        for line in lines:
+                            # Skip empty lines and comments (unless they contain URLs)
+                            if not line.strip() or line.strip().startswith('#'):
+                                # Check if comment line contains a URL that needs rewriting
+                                if 'http://' in line or 'https://' in line:
+                                    rewritten_lines.append(line)
+                                else:
+                                    rewritten_lines.append(line)
+                            else:
+                                # This is likely a URL line (TS segment or another playlist)
+                                segment_url = line.strip()
+                                if segment_url:
+                                    # If relative URL, make it absolute
+                                    # This ensures the player can fetch TS segments correctly
+                                    if not segment_url.startswith('http://') and not segment_url.startswith('https://'):
+                                        absolute_url = urljoin(base_url_for_join, segment_url)
+                                        rewritten_lines.append(absolute_url)
+                                    else:
+                                        rewritten_lines.append(segment_url)
+                        
+                        rewritten_playlist = '\n'.join(rewritten_lines)
+                        yield rewritten_playlist.encode('utf-8')
+                    except Exception as rewrite_error:
+                        # If rewriting fails, just forward original content
+                        print(f"Warning: Could not rewrite m3u8 playlist URLs: {rewrite_error}")
+                        if first_chunk:
+                            yield first_chunk
+                        for chunk in response.iter_content(chunk_size=8192):
+                            if chunk:
+                                yield chunk
+                else:
+                    # For non-m3u8 streams, forward as-is
+                    if first_chunk:
+                        yield first_chunk
+                    
+                    for chunk in response.iter_content(chunk_size=8192):
+                        if chunk:
+                            yield chunk
             finally:
                 response.close()
         
