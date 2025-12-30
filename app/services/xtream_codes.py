@@ -441,14 +441,18 @@ class XtreamCodesService:
     
     def get_movie_stream_url(self, movie: Dict[str, Any] = None, stream_id: str = None) -> List[Dict[str, str]]:
         """
-        Get all possible stream URLs for a movie with metadata
+        Get stream URL for a movie using container_extension (as APK does)
+        
+        Simplified approach: Use direct URL pattern:
+        {base_url}/movie/{username}/{password}/{stream_id}.{container_extension}
+        Then extract token via 302 redirect.
         
         Args:
             movie: Movie dictionary from get_vod_streams() or get_vod_info() (optional if stream_id provided)
             stream_id: Direct stream ID to use (takes precedence)
         
         Returns:
-            List of dictionaries with stream URLs and metadata
+            List with single dictionary containing the tokenized stream URL
         """
         # Use provided stream_id or extract from movie
         if not stream_id:
@@ -471,131 +475,72 @@ class XtreamCodesService:
         if not stream_id:
             return []
         
-        urls = []
-        # Get container extension and direct source from movie if available
-        container_ext = 'm3u8'
-        direct_source = ''
+        # Get container extension from movie info (can be mp4, mkv, avi, etc.)
+        container_ext = None
         if movie:
             if 'info' in movie:
                 movie_info = movie.get('info', {})
-                container_ext = movie_info.get('container_extension', '') or container_ext
-                direct_source = movie_info.get('direct_source', '') or direct_source
+                container_ext = movie_info.get('container_extension', '') or None
             else:
-                container_ext = movie.get('container_extension', 'm3u8')
-                direct_source = movie.get('direct_source', '')
+                container_ext = movie.get('container_extension', '') or None
         
-        # Prioritize direct_source if available (usually the actual working URL)
-        if direct_source:
-            urls.append({
-                "url": direct_source,
-                "format": "direct",
-                "type": "direct",
-                "quality": "original",
-                "is_direct": True
-            })
+        # If no container_extension provided, default to mp4 (fallback)
+        if not container_ext:
+            container_ext = 'mp4'
         
-        # IMPORTANT: Prioritize container_extension (e.g., mp4) over m3u8
-        # Testing shows .mp4 works but .m3u8 returns empty HTML
-        # APK uses MP4 URLs with token parameter for authentication
-        if container_ext and container_ext not in ['m3u8', 'ts']:
-            # Try to get URL with token (as APK does)
-            url_with_token = self.get_stream_url_with_token(stream_id, "movie", container_ext)
-            urls.append({
-                "url": url_with_token or f"{self.base_url}/movie/{self.username}/{self.password}/{stream_id}.{container_ext}",
-                "format": container_ext,
-                "type": "video" if container_ext in ['mp4', 'mkv', 'avi'] else "direct",
-                "quality": "original",
-                "is_direct": False,
-                "has_token": url_with_token is not None and 'token=' in (url_with_token or '')
-            })
+        # Construct direct URL: {base_url}/movie/{username}/{password}/{stream_id}.{container_extension}
+        # Then get token via 302 redirect (as APK does)
+        # container_ext can be mp4, mkv, avi, or any other format the API provides
+        url_with_token = self.get_stream_url_with_token(stream_id, "movie", container_ext)
         
-        # Note: Segments-based m3u8 will be added by the route handler
-        # We can't use backend URL here since we don't know it in the service
-        # The route will add this option when returning stream URLs
-        
-        # Add direct m3u8 and ts as fallback options
-        urls.append({
-            "url": f"{self.base_url}/movie/{self.username}/{self.password}/{stream_id}.m3u8",
-            "format": "m3u8",
-            "type": "HLS",
-            "quality": "adaptive",
-            "is_direct": False
-        })
-        urls.append({
-            "url": f"{self.base_url}/movie/{self.username}/{self.password}/{stream_id}.ts",
-            "format": "ts",
-            "type": "MPEG-TS",
-            "quality": "standard",
-            "is_direct": False
-        })
-        
-        return urls
+        return [{
+            "url": url_with_token or f"{self.base_url}/movie/{self.username}/{self.password}/{stream_id}.{container_ext}",
+            "format": container_ext,
+            "type": "video",
+            "quality": "original",
+            "is_direct": False,
+            "has_token": url_with_token is not None and 'token=' in (url_with_token or '')
+        }]
     
     def get_episode_stream_url(self, episode: Dict[str, Any]) -> List[Dict[str, str]]:
         """
-        Get all possible stream URLs for a series episode with metadata
+        Get stream URL for a series episode using container_extension (as APK does)
+        
+        Simplified approach: Use direct URL pattern:
+        {base_url}/series/{username}/{password}/{episode_id}.{container_extension}
+        Then extract token via 302 redirect.
         
         Args:
             episode: Episode dictionary from get_series_info()
         
         Returns:
-            List of dictionaries with stream URLs and metadata
+            List with single dictionary containing the tokenized stream URL
         """
         # Try different possible ID fields
         episode_id = episode.get('id', '') or episode.get('stream_id', '') or episode.get('episode_id', '')
         if not episode_id:
             return []
         
-        urls = []
-        container_ext = episode.get('container_extension', 'm3u8')
-        direct_source = episode.get('direct_source', '')
+        # Get container extension from episode (can be mp4, mkv, avi, etc.)
+        container_ext = episode.get('container_extension', '') or None
         
-        # Prioritize direct_source if available (usually the actual working URL)
-        if direct_source:
-            urls.append({
-                "url": direct_source,
-                "format": "direct",
-                "type": "direct",
-                "quality": "original",
-                "is_direct": True
-            })
+        # If no container_extension provided, default to mp4 (fallback)
+        if not container_ext:
+            container_ext = 'mp4'
         
-        # IMPORTANT: Prioritize container_extension (e.g., mp4) over m3u8
-        # Testing shows .mp4 works but .m3u8 returns empty HTML
-        # APK uses MP4 URLs with token parameter for authentication
-        if container_ext and container_ext not in ['m3u8', 'ts']:
-            # Try to get URL with token (as APK does)
-            url_with_token = self.get_stream_url_with_token(episode_id, "series", container_ext)
-            urls.append({
-                "url": url_with_token or f"{self.base_url}/series/{self.username}/{self.password}/{episode_id}.{container_ext}",
-                "format": container_ext,
-                "type": "video" if container_ext in ['mp4', 'mkv', 'avi'] else "direct",
-                "quality": "original",
-                "is_direct": False,
-                "has_token": url_with_token is not None and 'token=' in (url_with_token or '')
-            })
+        # Construct direct URL: {base_url}/series/{username}/{password}/{episode_id}.{container_extension}
+        # Then get token via 302 redirect (as APK does)
+        # container_ext can be mp4, mkv, avi, or any other format the API provides
+        url_with_token = self.get_stream_url_with_token(episode_id, "series", container_ext)
         
-        # Note: Segments-based m3u8 will be added by the route handler
-        # We can't use backend URL here since we don't know it in the service
-        # The route will add this option when returning stream URLs
-        
-        # Add direct m3u8 and ts as fallback options
-        urls.append({
-            "url": f"{self.base_url}/series/{self.username}/{self.password}/{episode_id}.m3u8",
-            "format": "m3u8",
-            "type": "HLS",
-            "quality": "adaptive",
-            "is_direct": False
-        })
-        urls.append({
-            "url": f"{self.base_url}/series/{self.username}/{self.password}/{episode_id}.ts",
-            "format": "ts",
-            "type": "MPEG-TS",
-            "quality": "standard",
-            "is_direct": False
-        })
-        
-        return urls
+        return [{
+            "url": url_with_token or f"{self.base_url}/series/{self.username}/{self.password}/{episode_id}.{container_ext}",
+            "format": container_ext,
+            "type": "video",
+            "quality": "original",
+            "is_direct": False,
+            "has_token": url_with_token is not None and 'token=' in (url_with_token or '')
+        }]
     
     def test_stream_url(self, url: str) -> Dict[str, Any]:
         """

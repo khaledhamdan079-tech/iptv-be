@@ -511,81 +511,43 @@ async def get_movie_stream_url(
     vod_id: str = Query(..., description="VOD ID (stream_id)"),
     playlist_id: int = Query(0, description="Playlist ID (default: 0)")
 ):
-    """Get stream URL(s) for a movie
+    """Get stream URL for a movie
     
-    Returns multiple stream URL options (m3u8, ts, and container extension).
-    Recommended: Use m3u8 for HLS streaming (best compatibility).
+    Simplified approach: Uses direct URL pattern with container_extension:
+    {base_url}/movie/{username}/{password}/{stream_id}.{container_extension}
+    Token is extracted via 302 redirect (as APK does).
     """
     service = get_playlist_service(playlist_id)
     
     if not service:
         raise HTTPException(status_code=404, detail="No playlists available")
     
-    # Get movie info first (for metadata)
+    # Get movie info first (for container_extension)
     vod_info = service.get_vod_info(vod_id)
     if not vod_info or not vod_info.get('info'):
         raise HTTPException(status_code=404, detail="Movie not found")
     
-    # Get stream URLs using the vod_id as stream_id
+    # Get stream URL using the vod_id as stream_id
+    # This will construct: {base_url}/movie/{username}/{password}/{vod_id}.{container_extension}
+    # And extract token via 302 redirect
     stream_urls = service.get_movie_stream_url(movie=vod_info, stream_id=vod_id)
     
-    # Check if direct_source is available in movie info (usually the working URL)
+    if not stream_urls:
+        raise HTTPException(status_code=404, detail="Could not generate stream URL")
+    
+    # Return the single recommended URL (with token if available)
+    recommended = stream_urls[0]
+    
     movie_info = vod_info.get('info', {})
-    direct_source_url = movie_info.get('direct_source', '')
-    container_ext = movie_info.get('container_extension', '')
-    if direct_source_url and not any(url.get('url') == direct_source_url for url in stream_urls):
-        # Add direct_source as first option if not already included
-        stream_urls.insert(0, {
-            "url": direct_source_url,
-            "format": "direct",
-            "type": "direct",
-            "quality": "original",
-            "is_direct": True
-        })
-    
-    # NEW: Add segments-based m3u8 playlist URL (working alternative to direct m3u8)
-    # Use path-based URL ending with .m3u8 so ExoPlayer recognizes it as HLS
-    base_url = f"{request.url.scheme}://{request.url.netloc}"
-    segments_m3u8_url = f"{base_url}/api/xtream/segments/{vod_id}.m3u8?type=movie&playlist_id={playlist_id}"
-    # Insert after direct_source and container_ext, but before direct m3u8
-    insert_index = len([u for u in stream_urls if u.get('is_direct') or (u.get('format') not in ['m3u8', 'ts'] and u.get('type') == 'video')])
-    stream_urls.insert(insert_index, {
-        "url": segments_m3u8_url,
-        "format": "m3u8",
-        "type": "HLS",
-        "quality": "adaptive",
-        "is_direct": False,
-        "is_segments_based": True
-    })
-    
-    # Find recommended URL (prioritize: direct_source, then container_ext with token, then container_ext, then segments m3u8, then direct m3u8)
-    recommended = next((url for url in stream_urls if url.get('is_direct')), None)
-    if not recommended:
-        # Prefer container_extension (mp4, etc.) with token (as APK uses)
-        recommended = next((url for url in stream_urls 
-                           if url.get('format') not in ['m3u8', 'ts'] and url.get('type') == 'video' and url.get('has_token')), None)
-    if not recommended:
-        # Prefer container_extension (mp4, etc.) over m3u8
-        recommended = next((url for url in stream_urls 
-                           if url.get('format') not in ['m3u8', 'ts'] and url.get('type') == 'video'), None)
-    if not recommended:
-        # Prefer segments-based m3u8 over direct m3u8
-        recommended = next((url for url in stream_urls if url.get('is_segments_based')), None)
-    if not recommended:
-        recommended = next((url for url in stream_urls if url.get('format') == 'm3u8'), None)
-    if not recommended and stream_urls:
-        recommended = stream_urls[0]
-    
     return {
         "success": True,
         "vod_id": vod_id,
         "movie_data": {
-            "direct_source": direct_source_url,
             "container_extension": movie_info.get('container_extension')
         },
         "stream_urls": stream_urls,
-        "recommended_url": recommended.get('url') if recommended else None,
-        "recommended_format": recommended.get('format') if recommended else None
+        "recommended_url": recommended.get('url'),
+        "recommended_format": recommended.get('format')
     }
 
 
@@ -597,10 +559,11 @@ async def get_episode_stream_url(
     episode_number: str = Query(..., description="Episode number"),
     playlist_id: int = Query(0, description="Playlist ID (default: 0)")
 ):
-    """Get stream URL(s) for a series episode
+    """Get stream URL for a series episode
     
-    Returns multiple stream URL options (m3u8, ts, and container extension).
-    Recommended: Use m3u8 for HLS streaming (best compatibility).
+    Simplified approach: Uses direct URL pattern with container_extension:
+    {base_url}/series/{username}/{password}/{episode_id}.{container_extension}
+    Token is extracted via 302 redirect (as APK does).
     """
     service = get_playlist_service(playlist_id)
     
@@ -625,54 +588,16 @@ async def get_episode_stream_url(
     if not episode:
         raise HTTPException(status_code=404, detail="Episode not found")
     
-    # Get stream URLs
+    # Get stream URL
+    # This will construct: {base_url}/series/{username}/{password}/{episode_id}.{container_extension}
+    # And extract token via 302 redirect
     stream_urls = service.get_episode_stream_url(episode)
     
-    # Check if direct_source is available (usually the working URL)
-    direct_source_url = episode.get('direct_source', '')
-    container_ext = episode.get('container_extension', '')
-    if direct_source_url and not any(url.get('url') == direct_source_url for url in stream_urls):
-        # Add direct_source as first option if not already included
-        stream_urls.insert(0, {
-            "url": direct_source_url,
-            "format": "direct",
-            "type": "direct",
-            "quality": "original",
-            "is_direct": True
-        })
+    if not stream_urls:
+        raise HTTPException(status_code=404, detail="Could not generate stream URL")
     
-    # NEW: Add segments-based m3u8 playlist URL (working alternative to direct m3u8)
-    # Use path-based URL ending with .m3u8 so ExoPlayer recognizes it as HLS
-    base_url = f"{request.url.scheme}://{request.url.netloc}"
-    segments_m3u8_url = f"{base_url}/api/xtream/segments/{episode.get('id')}.m3u8?type=series&playlist_id={playlist_id}"
-    # Insert after direct_source and container_ext, but before direct m3u8
-    insert_index = len([u for u in stream_urls if u.get('is_direct') or (u.get('format') not in ['m3u8', 'ts'] and u.get('type') == 'video')])
-    stream_urls.insert(insert_index, {
-        "url": segments_m3u8_url,
-        "format": "m3u8",
-        "type": "HLS",
-        "quality": "adaptive",
-        "is_direct": False,
-        "is_segments_based": True
-    })
-    
-    # Find recommended URL (prioritize: direct_source, then container_ext with token, then container_ext, then segments m3u8, then direct m3u8)
-    recommended = next((url for url in stream_urls if url.get('is_direct')), None)
-    if not recommended:
-        # Prefer container_extension (mp4, etc.) with token (as APK uses)
-        recommended = next((url for url in stream_urls 
-                           if url.get('format') not in ['m3u8', 'ts'] and url.get('type') == 'video' and url.get('has_token')), None)
-    if not recommended:
-        # Prefer container_extension (mp4, etc.) over m3u8
-        recommended = next((url for url in stream_urls 
-                           if url.get('format') not in ['m3u8', 'ts'] and url.get('type') == 'video'), None)
-    if not recommended:
-        # Prefer segments-based m3u8 over direct m3u8
-        recommended = next((url for url in stream_urls if url.get('is_segments_based')), None)
-    if not recommended:
-        recommended = next((url for url in stream_urls if url.get('format') == 'm3u8'), None)
-    if not recommended and stream_urls:
-        recommended = stream_urls[0]
+    # Return the single recommended URL (with token if available)
+    recommended = stream_urls[0]
     
     return {
         "success": True,
@@ -681,12 +606,11 @@ async def get_episode_stream_url(
         "episode": episode_number,
         "episode_data": {
             "id": episode.get('id'),
-            "direct_source": direct_source_url,
             "container_extension": episode.get('container_extension')
         },
         "stream_urls": stream_urls,
-        "recommended_url": recommended.get('url') if recommended else None,
-        "recommended_format": recommended.get('format') if recommended else None
+        "recommended_url": recommended.get('url'),
+        "recommended_format": recommended.get('format')
     }
 
 
