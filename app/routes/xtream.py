@@ -99,9 +99,11 @@ async def get_vod_categories(playlist_id: int = Query(0, description="Playlist I
 @router.get("/vod/movies")
 async def get_vod_movies(
     playlist_id: int = Query(0, description="Playlist ID (default: 0)"),
-    category_id: Optional[str] = Query(None, description="Category ID to filter")
+    category_id: Optional[str] = Query(None, description="Category ID to filter"),
+    page: int = Query(1, ge=1, description="Page number (starts at 1)"),
+    limit: int = Query(50, ge=1, le=500, description="Items per page (max 500)")
 ):
-    """Get VOD movies"""
+    """Get VOD movies with pagination"""
     service = get_playlist_service(playlist_id)
     
     if not service:
@@ -109,10 +111,22 @@ async def get_vod_movies(
     
     movies = service.get_vod_streams(category_id)
     
+    # Calculate pagination
+    total_count = len(movies)
+    offset = (page - 1) * limit
+    paginated_movies = movies[offset:offset + limit]
+    
     return {
         "success": True,
-        "data": movies,
-        "count": len(movies)
+        "data": paginated_movies,
+        "pagination": {
+            "page": page,
+            "limit": limit,
+            "total": total_count,
+            "total_pages": (total_count + limit - 1) // limit if total_count > 0 else 0,
+            "has_next": offset + limit < total_count,
+            "has_prev": page > 1
+        }
     }
 
 
@@ -196,9 +210,11 @@ async def get_series_categories(playlist_id: int = Query(0, description="Playlis
 @router.get("/series/list")
 async def get_series_list(
     playlist_id: int = Query(0, description="Playlist ID (default: 0)"),
-    category_id: Optional[str] = Query(None, description="Category ID to filter")
+    category_id: Optional[str] = Query(None, description="Category ID to filter"),
+    page: int = Query(1, ge=1, description="Page number (starts at 1)"),
+    limit: int = Query(50, ge=1, le=500, description="Items per page (max 500)")
 ):
-    """Get series list"""
+    """Get series list with pagination"""
     service = get_playlist_service(playlist_id)
     
     if not service:
@@ -206,10 +222,22 @@ async def get_series_list(
     
     series = service.get_series(category_id)
     
+    # Calculate pagination
+    total_count = len(series)
+    offset = (page - 1) * limit
+    paginated_series = series[offset:offset + limit]
+    
     return {
         "success": True,
-        "data": series,
-        "count": len(series)
+        "data": paginated_series,
+        "pagination": {
+            "page": page,
+            "limit": limit,
+            "total": total_count,
+            "total_pages": (total_count + limit - 1) // limit if total_count > 0 else 0,
+            "has_next": offset + limit < total_count,
+            "has_prev": page > 1
+        }
     }
 
 
