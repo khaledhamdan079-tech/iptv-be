@@ -826,71 +826,71 @@ async def get_segments_m3u8(
         segments = cached_segments
     else:
         # Use concurrent requests to discover segments faster
-    def check_segment(segment_num: int) -> Optional[int]:
-        """Check if a segment exists, return segment number if it does"""
-        segment_url = f"{segments_base}/{segment_num}.ts"
-        try:
-            # Use HEAD request with shorter timeout (1 second)
-            response = service.session.head(segment_url, timeout=1, allow_redirects=True)
-            if response.status_code == 200:
-                content_type = response.headers.get('Content-Type', '').lower()
-                # Accept video/mp2t, application/octet-stream, or video/*
-                if 'video' in content_type or 'mp2t' in content_type or 'octet-stream' in content_type:
-                    return segment_num
-            return None
-        except:
-            return None
-    
-    # Check segments in batches concurrently
-    segments = []
-    max_segments_to_check = 500  # Reduced limit for faster discovery
-    batch_size = 20  # Check 20 segments concurrently
-    
-    print(f"Discovering segments for {stream_id}...")
-    
-    # Use ThreadPoolExecutor for concurrent HEAD requests
-    with concurrent.futures.ThreadPoolExecutor(max_workers=batch_size) as executor:
-        # Check first batch to see if segments exist
-        first_batch = list(range(min(20, max_segments_to_check)))
-        futures = {executor.submit(check_segment, i): i for i in first_batch}
+        def check_segment(segment_num: int) -> Optional[int]:
+            """Check if a segment exists, return segment number if it does"""
+            segment_url = f"{segments_base}/{segment_num}.ts"
+            try:
+                # Use HEAD request with shorter timeout (1 second)
+                response = service.session.head(segment_url, timeout=1, allow_redirects=True)
+                if response.status_code == 200:
+                    content_type = response.headers.get('Content-Type', '').lower()
+                    # Accept video/mp2t, application/octet-stream, or video/*
+                    if 'video' in content_type or 'mp2t' in content_type or 'octet-stream' in content_type:
+                        return segment_num
+                return None
+            except:
+                return None
         
-        found_any = False
-        for future in concurrent.futures.as_completed(futures, timeout=5):
-            result = future.result()
-            if result is not None:
-                segments.append(result)
-                found_any = True
+        # Check segments in batches concurrently
+        segments = []
+        max_segments_to_check = 500  # Reduced limit for faster discovery
+        batch_size = 20  # Check 20 segments concurrently
         
-        # If we found segments in first batch, continue checking in batches
-        if found_any:
-            # Sort segments found so far
-            segments.sort()
-            last_found = segments[-1]
+        print(f"Discovering segments for {stream_id}...")
+        
+        # Use ThreadPoolExecutor for concurrent HEAD requests
+        with concurrent.futures.ThreadPoolExecutor(max_workers=batch_size) as executor:
+            # Check first batch to see if segments exist
+            first_batch = list(range(min(20, max_segments_to_check)))
+            futures = {executor.submit(check_segment, i): i for i in first_batch}
             
-            # Continue checking from where we left off
-            for batch_start in range(20, max_segments_to_check, batch_size):
-                batch_end = min(batch_start + batch_size, max_segments_to_check)
-                batch = list(range(batch_start, batch_end))
+            found_any = False
+            for future in concurrent.futures.as_completed(futures, timeout=5):
+                result = future.result()
+                if result is not None:
+                    segments.append(result)
+                    found_any = True
+            
+            # If we found segments in first batch, continue checking in batches
+            if found_any:
+                # Sort segments found so far
+                segments.sort()
+                last_found = segments[-1]
                 
-                futures = {executor.submit(check_segment, i): i for i in batch}
-                batch_found = False
-                
-                for future in concurrent.futures.as_completed(futures, timeout=3):
-                    result = future.result()
-                    if result is not None:
-                        segments.append(result)
-                        batch_found = True
-                
-                # If no segments found in this batch, we've probably reached the end
-                if not batch_found:
-                    # Check a few more to be sure
-                    for i in range(batch_end, min(batch_end + 10, max_segments_to_check)):
-                        result = check_segment(i)
+                # Continue checking from where we left off
+                for batch_start in range(20, max_segments_to_check, batch_size):
+                    batch_end = min(batch_start + batch_size, max_segments_to_check)
+                    batch = list(range(batch_start, batch_end))
+                    
+                    futures = {executor.submit(check_segment, i): i for i in batch}
+                    batch_found = False
+                    
+                    for future in concurrent.futures.as_completed(futures, timeout=3):
+                        result = future.result()
                         if result is not None:
                             segments.append(result)
-                        else:
-                            break
-                    break
+                            batch_found = True
+                    
+                    # If no segments found in this batch, we've probably reached the end
+                    if not batch_found:
+                        # Check a few more to be sure
+                        for i in range(batch_end, min(batch_end + 10, max_segments_to_check)):
+                            result = check_segment(i)
+                            if result is not None:
+                                segments.append(result)
+                            else:
+                                break
+                        break
     
     if not segments:
         raise HTTPException(
