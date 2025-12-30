@@ -99,10 +99,15 @@ class XtreamCodesService:
             url = self._get_api_url("get_vod_streams")
             if category_id:
                 url += f"&category_id={category_id}"
-            response = self.session.get(url, timeout=10)
+            # Increased timeout for large data fetches (30 seconds)
+            response = self.session.get(url, timeout=30)
             response.raise_for_status()
             return response.json()
+        except requests.exceptions.Timeout:
+            print(f"Timeout fetching VOD streams (category: {category_id})")
+            return []
         except requests.exceptions.RequestException as e:
+            print(f"Error fetching VOD streams: {e}")
             return []
     
     def get_series_categories(self) -> List[Dict[str, Any]]:
@@ -128,10 +133,15 @@ class XtreamCodesService:
             url = self._get_api_url("get_series")
             if category_id:
                 url += f"&category_id={category_id}"
-            response = self.session.get(url, timeout=10)
+            # Increased timeout for large data fetches (30 seconds)
+            response = self.session.get(url, timeout=30)
             response.raise_for_status()
             return response.json()
+        except requests.exceptions.Timeout:
+            print(f"Timeout fetching series (category: {category_id})")
+            return []
         except requests.exceptions.RequestException as e:
+            print(f"Error fetching series: {e}")
             return []
     
     def get_series_info(self, series_id: str) -> Dict[str, Any]:

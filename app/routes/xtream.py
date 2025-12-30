@@ -104,30 +104,40 @@ async def get_vod_movies(
     limit: int = Query(50, ge=1, le=500, description="Items per page (max 500)")
 ):
     """Get VOD movies with pagination"""
+    import asyncio
+    
     service = get_playlist_service(playlist_id)
     
     if not service:
         raise HTTPException(status_code=404, detail="No playlists available")
     
-    movies = service.get_vod_streams(category_id)
-    
-    # Calculate pagination
-    total_count = len(movies)
-    offset = (page - 1) * limit
-    paginated_movies = movies[offset:offset + limit]
-    
-    return {
-        "success": True,
-        "data": paginated_movies,
-        "pagination": {
-            "page": page,
-            "limit": limit,
-            "total": total_count,
-            "total_pages": (total_count + limit - 1) // limit if total_count > 0 else 0,
-            "has_next": offset + limit < total_count,
-            "has_prev": page > 1
+    try:
+        # Run the blocking call in a thread pool to avoid blocking the event loop
+        loop = asyncio.get_event_loop()
+        movies = await loop.run_in_executor(None, service.get_vod_streams, category_id)
+        
+        # Calculate pagination
+        total_count = len(movies)
+        offset = (page - 1) * limit
+        paginated_movies = movies[offset:offset + limit]
+        
+        return {
+            "success": True,
+            "data": paginated_movies,
+            "pagination": {
+                "page": page,
+                "limit": limit,
+                "total": total_count,
+                "total_pages": (total_count + limit - 1) // limit if total_count > 0 else 0,
+                "has_next": offset + limit < total_count,
+                "has_prev": page > 1
+            }
         }
-    }
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error fetching movies: {str(e)}"
+        )
 
 
 @router.get("/vod/search")
@@ -215,30 +225,40 @@ async def get_series_list(
     limit: int = Query(50, ge=1, le=500, description="Items per page (max 500)")
 ):
     """Get series list with pagination"""
+    import asyncio
+    
     service = get_playlist_service(playlist_id)
     
     if not service:
         raise HTTPException(status_code=404, detail="No playlists available")
     
-    series = service.get_series(category_id)
-    
-    # Calculate pagination
-    total_count = len(series)
-    offset = (page - 1) * limit
-    paginated_series = series[offset:offset + limit]
-    
-    return {
-        "success": True,
-        "data": paginated_series,
-        "pagination": {
-            "page": page,
-            "limit": limit,
-            "total": total_count,
-            "total_pages": (total_count + limit - 1) // limit if total_count > 0 else 0,
-            "has_next": offset + limit < total_count,
-            "has_prev": page > 1
+    try:
+        # Run the blocking call in a thread pool to avoid blocking the event loop
+        loop = asyncio.get_event_loop()
+        series = await loop.run_in_executor(None, service.get_series, category_id)
+        
+        # Calculate pagination
+        total_count = len(series)
+        offset = (page - 1) * limit
+        paginated_series = series[offset:offset + limit]
+        
+        return {
+            "success": True,
+            "data": paginated_series,
+            "pagination": {
+                "page": page,
+                "limit": limit,
+                "total": total_count,
+                "total_pages": (total_count + limit - 1) // limit if total_count > 0 else 0,
+                "has_next": offset + limit < total_count,
+                "has_prev": page > 1
+            }
         }
-    }
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error fetching series: {str(e)}"
+        )
 
 
 @router.get("/series/search")
