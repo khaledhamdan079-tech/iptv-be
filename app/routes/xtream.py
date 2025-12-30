@@ -434,34 +434,56 @@ async def proxy_stream(
         # Check content type
         content_type = response.headers.get('Content-Type', '').lower()
         
-        # Check if it's HTML - read first chunk to verify
+        # Always read first chunk to verify it's not HTML (some servers return HTML with wrong content-type)
         first_chunk = None
-        if 'text/html' in content_type:
-            # Read first chunk to check if it's actually HTML
-            try:
-                first_chunk = next(response.iter_content(chunk_size=512), b'')
-                if first_chunk:
-                    content_preview = first_chunk.decode('utf-8', errors='ignore').lower()
-                    # Check if it looks like HTML
-                    if '<html' in content_preview or '<!doctype' in content_preview:
-                        response.close()
-                        raise HTTPException(
-                            status_code=400,
-                            detail="Stream URL returns HTML instead of video. The URL may require different authentication or the stream may be unavailable. Please check if the episode has a direct_source URL available in the episode_data field."
-                        )
-            except StopIteration:
+        try:
+            first_chunk = next(response.iter_content(chunk_size=1024), b'')
+            if not first_chunk:
                 response.close()
                 raise HTTPException(
                     status_code=400,
-                    detail="Stream URL returned empty response"
+                    detail="Stream URL returned empty response from server"
                 )
-            except Exception as e:
-                # If we can't read, close and re-raise
+            
+            # Check if it's HTML (regardless of content-type header)
+            content_preview = first_chunk.decode('utf-8', errors='ignore')
+            content_lower = content_preview.lower()
+            
+            if '<html' in content_lower or '<!doctype' in content_lower or content_lower.strip().startswith('<!'):
                 response.close()
+                # Log the actual response for debugging
+                preview = content_preview[:500].replace('\n', ' ').replace('\r', ' ')
                 raise HTTPException(
                     status_code=400,
-                    detail=f"Error reading stream: {str(e)}"
+                    detail=f"Stream URL returns HTML instead of video. Server response: {preview[:200]}... The URL may require different authentication. Please check if the episode has a direct_source URL available in the episode_data field."
                 )
+            
+            # Check if it's a valid m3u8 playlist
+            if '.m3u8' in url or 'm3u8' in url.lower():
+                content_stripped = content_preview.strip()
+                if not (content_stripped.startswith('#EXTM3U') or content_stripped.startswith('#EXT-X')):
+                    # Not a valid m3u8, might be HTML or error message
+                    response.close()
+                    preview = content_preview[:300].replace('\n', ' ').replace('\r', ' ')
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Stream URL returned invalid m3u8 content. Expected '#EXTM3U' or '#EXT-X' but got: {preview[:200]}..."
+                    )
+        except StopIteration:
+            response.close()
+            raise HTTPException(
+                status_code=400,
+                detail="Stream URL returned empty response"
+            )
+        except HTTPException:
+            raise
+        except Exception as e:
+            # If we can't read, close and re-raise
+            response.close()
+            raise HTTPException(
+                status_code=400,
+                detail=f"Error reading stream: {str(e)}"
+            )
         
         # Forward the stream
         def generate():
