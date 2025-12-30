@@ -427,6 +427,14 @@ class XtreamCodesService:
             # Note: Using GET (not HEAD) as some servers don't return Location header in HEAD requests
             print(f"DEBUG get_stream_url_with_token: Making request to {base_url}")
             print(f"DEBUG get_stream_url_with_token: Session headers: {dict(self.session.headers)}")
+            print(f"DEBUG get_stream_url_with_token: Session cookies: {dict(self.session.cookies)}")
+            
+            # Clear any cookies that might interfere with token extraction
+            # Some servers set cookies on first request that affect subsequent requests
+            cookies_before = dict(self.session.cookies)
+            if cookies_before:
+                print(f"DEBUG: Clearing {len(cookies_before)} cookies before token extraction")
+                self.session.cookies.clear()
             
             # Use a fresh request with explicit headers (don't rely on session headers)
             response = self.session.get(
@@ -477,8 +485,33 @@ class XtreamCodesService:
                 if location and 'token=' in location:
                     if location.startswith('http://') or location.startswith('https://'):
                         print(f"✅ Token found in 200 response Location header for {stream_id} ({stream_type})")
+                        response.close()
                         return location
-                print(f"⚠️ Got 200 response (no redirect) for {stream_id} ({stream_type}) - token may not be required")
+                
+                # Even if we get 200, try following redirects - some servers redirect after 200
+                print(f"⚠️ Got 200 response, trying with allow_redirects=True to check for token...")
+                response.close()  # Close the initial response first
+                try:
+                    redirect_response = self.session.get(
+                        base_url,
+                        allow_redirects=True,
+                        timeout=15,
+                        headers={
+                            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                            'Accept': '*/*',
+                        }
+                    )
+                    final_url = str(redirect_response.url)
+                    print(f"DEBUG: After following redirects, final URL: {final_url[:200]}...")
+                    if 'token=' in final_url:
+                        print(f"✅ Token found after following redirects for {stream_id} ({stream_type})")
+                        redirect_response.close()
+                        return final_url
+                    else:
+                        print(f"⚠️ Got 200 response (no redirect) for {stream_id} ({stream_type}) - token may not be required")
+                    redirect_response.close()
+                except Exception as redirect_error:
+                    print(f"⚠️ Redirect attempt failed: {redirect_error}")
             elif response.status_code == 401:
                 # 401 - try with allow_redirects=True to follow redirects
                 print(f"⚠️ Got 401, trying with allow_redirects=True for {stream_id} ({stream_type})")
