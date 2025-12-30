@@ -456,29 +456,31 @@ async def get_live_stream_url(
     format: str = Query("m3u8", description="Stream format (m3u8 or ts)"),
     playlist_id: int = Query(0, description="Playlist ID (default: 0)")
 ):
-    """Get stream URL(s) for a live TV channel
+    """Get stream URL for a live TV channel
     
-    Returns multiple stream URL options (m3u8 and ts).
-    Recommended: Use m3u8 for HLS streaming (best compatibility).
+    Returns tokenized m3u8 URL (with authentication token) for live TV streaming.
+    Token is extracted via 302 redirect (as APK does).
     """
     service = get_playlist_service(playlist_id)
     
     if not service:
         raise HTTPException(status_code=404, detail="No playlists available")
     
-    # Get stream URLs
+    # Get stream URL with token (m3u8 is standard for live TV)
     stream_urls = service.get_live_stream_url(stream_id, format)
     
-    # Find recommended URL (prioritize m3u8 over ts)
-    recommended = next((url for url in stream_urls if url.get('format') == 'm3u8'), None)
-    if not recommended and stream_urls:
-        recommended = stream_urls[0]
+    if not stream_urls:
+        raise HTTPException(status_code=404, detail="Could not generate stream URL")
+    
+    # Return the single recommended URL (with token if available)
+    recommended = stream_urls[0]
     
     return {
         "success": True,
+        "stream_id": stream_id,
         "stream_urls": stream_urls,
-        "recommended_url": recommended.get('url') if recommended else None,
-        "recommended_format": recommended.get('format') if recommended else None
+        "recommended_url": recommended.get('url'),
+        "recommended_format": recommended.get('format')
     }
 
 

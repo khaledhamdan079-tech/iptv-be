@@ -117,46 +117,29 @@ class XtreamCodesService:
     
     def get_live_stream_url(self, stream_id: str, format: str = "m3u8") -> List[Dict[str, str]]:
         """
-        Get all possible stream URLs for a live TV channel
+        Get stream URL for a live TV channel with token (as APK does)
+        
+        Live TV streams use m3u8 format and need token extraction like movies/series.
         
         Args:
             stream_id: Stream ID
-            format: Preferred format (m3u8 or ts)
+            format: Preferred format (m3u8 or ts) - m3u8 is standard for live TV
         
         Returns:
-            List of dictionaries with stream URLs and metadata
+            List with single dictionary containing the tokenized stream URL
         """
-        urls = []
+        # Get tokenized URL (m3u8 is standard for live TV)
+        # Live TV also needs token extraction for authentication
+        url_with_token = self.get_stream_url_with_token(stream_id, "live", "m3u8")
         
-        # Live streams typically use m3u8 or ts format
-        if format == "m3u8" or format == "ts":
-            urls.append({
-                "url": f"{self.base_url}/live/{self.username}/{self.password}/{stream_id}.{format}",
-                "format": format,
-                "type": "HLS" if format == "m3u8" else "MPEG-TS",
-                "quality": "adaptive" if format == "m3u8" else "standard",
-                "is_direct": False
-            })
-        
-        # Always include both formats
-        if format != "m3u8":
-            urls.append({
-                "url": f"{self.base_url}/live/{self.username}/{self.password}/{stream_id}.m3u8",
-                "format": "m3u8",
-                "type": "HLS",
-                "quality": "adaptive",
-                "is_direct": False
-            })
-        if format != "ts":
-            urls.append({
-                "url": f"{self.base_url}/live/{self.username}/{self.password}/{stream_id}.ts",
-                "format": "ts",
-                "type": "MPEG-TS",
-                "quality": "standard",
-                "is_direct": False
-            })
-        
-        return urls
+        return [{
+            "url": url_with_token or f"{self.base_url}/live/{self.username}/{self.password}/{stream_id}.m3u8",
+            "format": "m3u8",
+            "type": "HLS",
+            "quality": "adaptive",
+            "is_direct": False,
+            "has_token": url_with_token is not None and 'token=' in (url_with_token or '')
+        }]
     
     def get_epg(self, stream_id: str = None) -> Dict[str, Any]:
         """

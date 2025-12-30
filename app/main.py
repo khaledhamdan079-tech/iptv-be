@@ -4,7 +4,8 @@ Main FastAPI application for IPTV Arabic Backend
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from app.routes import series, episodes, search, maso, xtream, maso
+from app.routes import series, episodes, search, maso, xtream, database
+from app.database import init_db
 import sys
 
 app = FastAPI(
@@ -12,6 +13,16 @@ app = FastAPI(
     description="Backend API for Arabic translated series streaming",
     version="1.0.0"
 )
+
+# Initialize database on startup
+@app.on_event("startup")
+async def startup_event():
+    """Initialize database on application startup"""
+    try:
+        init_db()
+        print("✅ Database initialized")
+    except Exception as e:
+        print(f"⚠️  Database initialization warning: {e}")
 
 # CORS middleware
 app.add_middleware(
@@ -53,6 +64,7 @@ app.include_router(episodes.router, prefix="/api/episodes", tags=["episodes"])
 app.include_router(search.router, prefix="/api/search", tags=["search"])
 app.include_router(maso.router)
 app.include_router(xtream.router)
+app.include_router(database.router)
 
 
 @app.get("/")
@@ -67,7 +79,8 @@ async def root():
             "episodes": "/api/episodes",
             "search": "/api/search",
             "maso": "/api/maso",
-            "xtream": "/api/xtream"
+            "xtream": "/api/xtream",
+            "database": "/api/db"
         }
     }
 
