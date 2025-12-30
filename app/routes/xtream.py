@@ -286,6 +286,7 @@ async def get_movie_stream_url(
     # Check if direct_source is available in movie info (usually the working URL)
     movie_info = vod_info.get('info', {})
     direct_source_url = movie_info.get('direct_source', '')
+    container_ext = movie_info.get('container_extension', '')
     if direct_source_url and not any(url.get('url') == direct_source_url for url in stream_urls):
         # Add direct_source as first option if not already included
         stream_urls.insert(0, {
@@ -296,8 +297,13 @@ async def get_movie_stream_url(
             "is_direct": True
         })
     
-    # Find recommended URL (prioritize direct_source, then m3u8)
+    # Find recommended URL (prioritize: direct_source, then container_ext like mp4, then m3u8)
+    # Testing shows container_ext (mp4) works, but m3u8 returns empty HTML
     recommended = next((url for url in stream_urls if url.get('is_direct')), None)
+    if not recommended:
+        # Prefer container_extension (mp4, etc.) over m3u8
+        recommended = next((url for url in stream_urls 
+                           if url.get('format') not in ['m3u8', 'ts'] and url.get('type') == 'video'), None)
     if not recommended:
         recommended = next((url for url in stream_urls if url.get('format') == 'm3u8'), None)
     if not recommended and stream_urls:
@@ -356,6 +362,7 @@ async def get_episode_stream_url(
     
     # Check if direct_source is available (usually the working URL)
     direct_source_url = episode.get('direct_source', '')
+    container_ext = episode.get('container_extension', '')
     if direct_source_url and not any(url.get('url') == direct_source_url for url in stream_urls):
         # Add direct_source as first option if not already included
         stream_urls.insert(0, {
@@ -366,8 +373,13 @@ async def get_episode_stream_url(
             "is_direct": True
         })
     
-    # Find recommended URL (prioritize direct_source, then m3u8)
+    # Find recommended URL (prioritize: direct_source, then container_ext like mp4, then m3u8)
+    # Testing shows container_ext (mp4) works, but m3u8 returns empty HTML
     recommended = next((url for url in stream_urls if url.get('is_direct')), None)
+    if not recommended:
+        # Prefer container_extension (mp4, etc.) over m3u8
+        recommended = next((url for url in stream_urls 
+                           if url.get('format') not in ['m3u8', 'ts'] and url.get('type') == 'video'), None)
     if not recommended:
         recommended = next((url for url in stream_urls if url.get('format') == 'm3u8'), None)
     if not recommended and stream_urls:
@@ -408,8 +420,49 @@ async def proxy_stream(
         raise HTTPException(status_code=404, detail="No playlists available")
     
     try:
-        # Fetch the stream with authentication and proper headers
-        # Use the service's session which has authentication configured
+        # Parse URL to get base for referrer
+        from urllib.parse import urlparse
+        parsed = urlparse(url)
+        base_url = f"{parsed.scheme}://{parsed.netloc}"
+        
+        # Xtream Codes often returns 302 redirects with tokens
+        # First, check for redirect without following (to get token URL)
+        initial_headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Accept': '*/*',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Referer': base_url,
+            'Origin': base_url,
+        }
+        
+        initial_response = service.session.get(
+            url,
+            stream=False,
+            timeout=10,
+            allow_redirects=False,
+            headers=initial_headers
+        )
+        
+        # If we get a redirect (302), follow it to get the token URL
+        if initial_response.status_code == 302:
+            redirect_url = initial_response.headers.get('Location')
+            if redirect_url:
+                # Use the redirect URL which contains the token
+                if not redirect_url.startswith('http'):
+                    redirect_url = f"{base_url}{redirect_url}" if redirect_url.startswith('/') else f"{base_url}/{redirect_url}"
+                url = redirect_url
+            initial_response.close()
+        elif initial_response.status_code == 200:
+            # If we get 200 directly, we can use it
+            initial_response.close()
+        else:
+            initial_response.close()
+            raise HTTPException(
+                status_code=initial_response.status_code,
+                detail=f"Stream server returned status {initial_response.status_code} on initial request."
+            )
+        
+        # Now fetch the stream with the token URL (or original if no redirect)
         response = service.session.get(
             url,
             stream=True,
@@ -417,14 +470,15 @@ async def proxy_stream(
             allow_redirects=True,
             headers={
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                'Accept': '*/*',
+                'Accept': 'application/vnd.apple.mpegurl, application/x-mpegURL, */*',
                 'Accept-Language': 'en-US,en;q=0.9',
-                'Referer': url.split('/series/')[0] if '/series/' in url else url.split('/movie/')[0] if '/movie/' in url else '',
+                'Referer': base_url,
+                'Origin': base_url,
             }
         )
         
-        # Check status code first
-        if response.status_code != 200:
+        # Check status code (200 or 206 for partial content)
+        if response.status_code not in [200, 206]:
             response.close()
             raise HTTPException(
                 status_code=response.status_code,
@@ -437,13 +491,45 @@ async def proxy_stream(
         # Always read first chunk to verify it's not HTML (some servers return HTML with wrong content-type)
         first_chunk = None
         try:
-            first_chunk = next(response.iter_content(chunk_size=1024), b'')
-            if not first_chunk:
+            # Read first chunk - some servers may take time to start streaming
+            # Use a small timeout to avoid hanging
+            iterator = response.iter_content(chunk_size=1024)
+            
+            # Try to get first chunk
+            try:
+                first_chunk = next(iterator, b'')
+            except StopIteration:
+                first_chunk = b''
+            except Exception as read_error:
+                # If reading fails, the stream might be empty or server error
                 response.close()
                 raise HTTPException(
                     status_code=400,
-                    detail="Stream URL returned empty response from server"
+                    detail=f"Error reading stream from server: {str(read_error)}. The server may require different authentication."
                 )
+            
+            # If no chunk, check response details
+            if not first_chunk or len(first_chunk) == 0:
+                # Check response headers for clues
+                content_length = response.headers.get('Content-Length', '')
+                transfer_encoding = response.headers.get('Transfer-Encoding', '')
+                
+                # If chunked encoding, empty first chunk might be OK (wait for more)
+                if transfer_encoding.lower() == 'chunked':
+                    # For chunked encoding, try to read more
+                    try:
+                        first_chunk = next(iterator, b'')
+                    except:
+                        pass
+                
+                # If still empty after trying chunked, it's really empty
+                if not first_chunk or len(first_chunk) == 0:
+                    response.close()
+                    error_detail = f"Stream URL returned empty response. Status: {response.status_code}, Content-Type: {content_type}"
+                    if content_length:
+                        error_detail += f", Content-Length: {content_length}"
+                    error_detail += ". The server may require different authentication or the stream may be unavailable."
+                    raise HTTPException(status_code=400, detail=error_detail)
             
             # Check if it's HTML (regardless of content-type header)
             content_preview = first_chunk.decode('utf-8', errors='ignore')

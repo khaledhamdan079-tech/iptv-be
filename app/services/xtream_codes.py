@@ -275,38 +275,42 @@ class XtreamCodesService:
                 container_ext = movie.get('container_extension', 'm3u8')
                 direct_source = movie.get('direct_source', '')
         
-        # Standard Xtream Codes formats (prefer m3u8 for HLS streaming)
-        urls.append({
-            "url": f"{self.base_url}/movie/{self.username}/{self.password}/{stream_id}.m3u8",
-            "format": "m3u8",
-            "type": "HLS",
-            "quality": "adaptive"
-        })
-        urls.append({
-            "url": f"{self.base_url}/movie/{self.username}/{self.password}/{stream_id}.ts",
-            "format": "ts",
-            "type": "MPEG-TS",
-            "quality": "standard"
-        })
-        
-        # Using container extension if different
-        if container_ext and container_ext not in ['m3u8', 'ts']:
-            urls.append({
-                "url": f"{self.base_url}/movie/{self.username}/{self.password}/{stream_id}.{container_ext}",
-                "format": container_ext,
-                "type": "direct",
-                "quality": "original"
-            })
-        
         # Prioritize direct_source if available (usually the actual working URL)
         if direct_source:
-            urls.insert(0, {
+            urls.append({
                 "url": direct_source,
                 "format": "direct",
                 "type": "direct",
                 "quality": "original",
                 "is_direct": True
             })
+        
+        # IMPORTANT: Prioritize container_extension (e.g., mp4) over m3u8
+        # Testing shows .mp4 works but .m3u8 returns empty HTML
+        if container_ext and container_ext not in ['m3u8', 'ts']:
+            urls.append({
+                "url": f"{self.base_url}/movie/{self.username}/{self.password}/{stream_id}.{container_ext}",
+                "format": container_ext,
+                "type": "video" if container_ext in ['mp4', 'mkv', 'avi'] else "direct",
+                "quality": "original",
+                "is_direct": False
+            })
+        
+        # Add m3u8 and ts as fallback options (but container_ext is preferred)
+        urls.append({
+            "url": f"{self.base_url}/movie/{self.username}/{self.password}/{stream_id}.m3u8",
+            "format": "m3u8",
+            "type": "HLS",
+            "quality": "adaptive",
+            "is_direct": False
+        })
+        urls.append({
+            "url": f"{self.base_url}/movie/{self.username}/{self.password}/{stream_id}.ts",
+            "format": "ts",
+            "type": "MPEG-TS",
+            "quality": "standard",
+            "is_direct": False
+        })
         
         return urls
     
@@ -339,7 +343,18 @@ class XtreamCodesService:
                 "is_direct": True
             })
         
-        # Standard Xtream Codes formats (prefer m3u8 for HLS streaming)
+        # IMPORTANT: Prioritize container_extension (e.g., mp4) over m3u8
+        # Testing shows .mp4 works but .m3u8 returns empty HTML
+        if container_ext and container_ext not in ['m3u8', 'ts']:
+            urls.append({
+                "url": f"{self.base_url}/series/{self.username}/{self.password}/{episode_id}.{container_ext}",
+                "format": container_ext,
+                "type": "video" if container_ext in ['mp4', 'mkv', 'avi'] else "direct",
+                "quality": "original",
+                "is_direct": False
+            })
+        
+        # Add m3u8 and ts as fallback options (but container_ext is preferred)
         urls.append({
             "url": f"{self.base_url}/series/{self.username}/{self.password}/{episode_id}.m3u8",
             "format": "m3u8",
@@ -354,16 +369,6 @@ class XtreamCodesService:
             "quality": "standard",
             "is_direct": False
         })
-        
-        # Using container extension if different
-        if container_ext and container_ext not in ['m3u8', 'ts']:
-            urls.append({
-                "url": f"{self.base_url}/series/{self.username}/{self.password}/{episode_id}.{container_ext}",
-                "format": container_ext,
-                "type": "direct",
-                "quality": "original",
-                "is_direct": False
-            })
         
         return urls
     
