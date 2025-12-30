@@ -790,6 +790,7 @@ async def proxy_stream(
 
 @router.get("/segments/m3u8")
 async def get_segments_m3u8(
+    request: Request,
     stream_id: str = Query(..., description="Stream ID (episode or movie ID)"),
     type: str = Query(..., description="Content type: 'series' or 'movie'"),
     playlist_id: int = Query(0, description="Playlist ID (default: 0)")
@@ -906,18 +907,26 @@ async def get_segments_m3u8(
     if cached_segments is None:
         _segments_cache[cache_key] = segments
     
-    # Generate m3u8 playlist
+    # Generate m3u8 playlist with proxied segment URLs
+    # Use proxy URLs so segments can be accessed by the Flutter app
+    base_url = f"{request.url.scheme}://{request.url.netloc}"
+    
     m3u8_content = "#EXTM3U\n"
     m3u8_content += "#EXT-X-VERSION:3\n"
     m3u8_content += "#EXT-X-TARGETDURATION:10\n"
     m3u8_content += "#EXT-X-MEDIA-SEQUENCE:0\n"
     m3u8_content += "#EXT-X-PLAYLIST-TYPE:VOD\n"
     
-    # Add each segment
+    # Add each segment with proxied URL
     for segment_num in segments:
-        segment_url = f"{segments_base}/{segment_num}.ts"
+        # Direct segment URL from Xtream Codes
+        direct_segment_url = f"{segments_base}/{segment_num}.ts"
+        # Proxy URL for the segment
+        from urllib.parse import quote
+        proxied_segment_url = f"{base_url}/api/xtream/stream/proxy?url={quote(direct_segment_url)}&playlist_id={playlist_id}"
+        
         m3u8_content += f"#EXTINF:10.0,\n"
-        m3u8_content += f"{segment_url}\n"
+        m3u8_content += f"{proxied_segment_url}\n"
     
     m3u8_content += "#EXT-X-ENDLIST\n"
     
