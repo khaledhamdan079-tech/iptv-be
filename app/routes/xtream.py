@@ -262,6 +262,7 @@ async def get_series_info(
 
 @router.get("/vod/stream-url")
 async def get_movie_stream_url(
+    request: Request,
     vod_id: str = Query(..., description="VOD ID (stream_id)"),
     playlist_id: int = Query(0, description="Playlist ID (default: 0)")
 ):
@@ -297,13 +298,29 @@ async def get_movie_stream_url(
             "is_direct": True
         })
     
-    # Find recommended URL (prioritize: direct_source, then container_ext like mp4, then m3u8)
-    # Testing shows container_ext (mp4) works, but m3u8 returns empty HTML
+    # NEW: Add segments-based m3u8 playlist URL (working alternative to direct m3u8)
+    base_url = f"{request.url.scheme}://{request.url.netloc}"
+    segments_m3u8_url = f"{base_url}/api/xtream/segments/m3u8?stream_id={vod_id}&type=movie&playlist_id={playlist_id}"
+    # Insert after direct_source and container_ext, but before direct m3u8
+    insert_index = len([u for u in stream_urls if u.get('is_direct') or (u.get('format') not in ['m3u8', 'ts'] and u.get('type') == 'video')])
+    stream_urls.insert(insert_index, {
+        "url": segments_m3u8_url,
+        "format": "m3u8",
+        "type": "HLS",
+        "quality": "adaptive",
+        "is_direct": False,
+        "is_segments_based": True
+    })
+    
+    # Find recommended URL (prioritize: direct_source, then container_ext like mp4, then segments m3u8, then direct m3u8)
     recommended = next((url for url in stream_urls if url.get('is_direct')), None)
     if not recommended:
         # Prefer container_extension (mp4, etc.) over m3u8
         recommended = next((url for url in stream_urls 
                            if url.get('format') not in ['m3u8', 'ts'] and url.get('type') == 'video'), None)
+    if not recommended:
+        # Prefer segments-based m3u8 over direct m3u8
+        recommended = next((url for url in stream_urls if url.get('is_segments_based')), None)
     if not recommended:
         recommended = next((url for url in stream_urls if url.get('format') == 'm3u8'), None)
     if not recommended and stream_urls:
@@ -373,13 +390,29 @@ async def get_episode_stream_url(
             "is_direct": True
         })
     
-    # Find recommended URL (prioritize: direct_source, then container_ext like mp4, then m3u8)
-    # Testing shows container_ext (mp4) works, but m3u8 returns empty HTML
+    # NEW: Add segments-based m3u8 playlist URL (working alternative to direct m3u8)
+    base_url = f"{request.url.scheme}://{request.url.netloc}"
+    segments_m3u8_url = f"{base_url}/api/xtream/segments/m3u8?stream_id={episode.get('id')}&type=series&playlist_id={playlist_id}"
+    # Insert after direct_source and container_ext, but before direct m3u8
+    insert_index = len([u for u in stream_urls if u.get('is_direct') or (u.get('format') not in ['m3u8', 'ts'] and u.get('type') == 'video')])
+    stream_urls.insert(insert_index, {
+        "url": segments_m3u8_url,
+        "format": "m3u8",
+        "type": "HLS",
+        "quality": "adaptive",
+        "is_direct": False,
+        "is_segments_based": True
+    })
+    
+    # Find recommended URL (prioritize: direct_source, then container_ext like mp4, then segments m3u8, then direct m3u8)
     recommended = next((url for url in stream_urls if url.get('is_direct')), None)
     if not recommended:
         # Prefer container_extension (mp4, etc.) over m3u8
         recommended = next((url for url in stream_urls 
                            if url.get('format') not in ['m3u8', 'ts'] and url.get('type') == 'video'), None)
+    if not recommended:
+        # Prefer segments-based m3u8 over direct m3u8
+        recommended = next((url for url in stream_urls if url.get('is_segments_based')), None)
     if not recommended:
         recommended = next((url for url in stream_urls if url.get('format') == 'm3u8'), None)
     if not recommended and stream_urls:
@@ -462,19 +495,36 @@ async def proxy_stream(
                 detail=f"Stream server returned status {initial_response.status_code} on initial request."
             )
         
+        # Determine if this is an m3u8 request
+        is_m3u8 = '.m3u8' in url.lower() or url.endswith('.m3u8')
+        
+        # For m3u8, use HLS-specific headers; for other formats, use general video headers
+        if is_m3u8:
+            stream_headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                'Accept': 'application/vnd.apple.mpegurl, application/x-mpegURL, application/json, */*',
+                'Accept-Language': 'en-US,en;q=0.9',
+                'Referer': base_url,
+                'Origin': base_url,
+                'Cache-Control': 'no-cache',
+            }
+        else:
+            stream_headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                'Accept': '*/*',
+                'Accept-Language': 'en-US,en;q=0.9',
+                'Referer': base_url,
+                'Origin': base_url,
+                'Range': 'bytes=0-',  # Request from start for progressive download
+            }
+        
         # Now fetch the stream with the token URL (or original if no redirect)
         response = service.session.get(
             url,
             stream=True,
             timeout=30,
             allow_redirects=True,
-            headers={
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                'Accept': 'application/vnd.apple.mpegurl, application/x-mpegURL, */*',
-                'Accept-Language': 'en-US,en;q=0.9',
-                'Referer': base_url,
-                'Origin': base_url,
-            }
+            headers=stream_headers
         )
         
         # Check status code (200 or 206 for partial content)
@@ -525,10 +575,14 @@ async def proxy_stream(
                 # If still empty after trying chunked, it's really empty
                 if not first_chunk or len(first_chunk) == 0:
                     response.close()
-                    error_detail = f"Stream URL returned empty response. Status: {response.status_code}, Content-Type: {content_type}"
-                    if content_length:
-                        error_detail += f", Content-Length: {content_length}"
-                    error_detail += ". The server may require different authentication or the stream may be unavailable."
+                    # For m3u8, provide specific guidance
+                    if is_m3u8:
+                        error_detail = "m3u8 stream returned empty response. This server may not provide HLS streams for this content. Try using the mp4 format (container_extension) instead, which is available in the stream_urls list."
+                    else:
+                        error_detail = f"Stream URL returned empty response. Status: {response.status_code}, Content-Type: {content_type}"
+                        if content_length:
+                            error_detail += f", Content-Length: {content_length}"
+                        error_detail += ". The server may require different authentication or the stream may be unavailable."
                     raise HTTPException(status_code=400, detail=error_detail)
             
             # Check if it's HTML (regardless of content-type header)
@@ -539,13 +593,20 @@ async def proxy_stream(
                 response.close()
                 # Log the actual response for debugging
                 preview = content_preview[:500].replace('\n', ' ').replace('\r', ' ')
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Stream URL returns HTML instead of video. Server response: {preview[:200]}... The URL may require different authentication. Please check if the episode has a direct_source URL available in the episode_data field."
-                )
+                # For m3u8, provide specific guidance
+                if is_m3u8:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="m3u8 stream returns HTML instead of playlist. This server may not provide HLS streams for this content. The episode likely only has mp4 format available. Check the stream_urls list for mp4 URLs (container_extension: 'mp4')."
+                    )
+                else:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Stream URL returns HTML instead of video. Server response: {preview[:200]}... The URL may require different authentication. Please check if the episode has a direct_source URL available in the episode_data field."
+                    )
             
             # Check if it's a valid m3u8 playlist
-            if '.m3u8' in url or 'm3u8' in url.lower():
+            if is_m3u8:
                 content_stripped = content_preview.strip()
                 if not (content_stripped.startswith('#EXTM3U') or content_stripped.startswith('#EXT-X')):
                     # Not a valid m3u8, might be HTML or error message
@@ -553,7 +614,7 @@ async def proxy_stream(
                     preview = content_preview[:300].replace('\n', ' ').replace('\r', ' ')
                     raise HTTPException(
                         status_code=400,
-                        detail=f"Stream URL returned invalid m3u8 content. Expected '#EXTM3U' or '#EXT-X' but got: {preview[:200]}..."
+                        detail=f"m3u8 stream returned invalid content. Expected '#EXTM3U' or '#EXT-X' but got: {preview[:200]}... This server may not provide HLS streams. Try using the mp4 format instead (available in stream_urls with container_extension: 'mp4')."
                     )
         except StopIteration:
             response.close()
@@ -618,6 +679,96 @@ async def proxy_stream(
         raise
     except requests.exceptions.RequestException as e:
         raise HTTPException(status_code=500, detail=f"Failed to fetch stream: {str(e)}")
+
+
+@router.get("/segments/m3u8")
+async def get_segments_m3u8(
+    stream_id: str = Query(..., description="Stream ID (episode or movie ID)"),
+    type: str = Query(..., description="Content type: 'series' or 'movie'"),
+    playlist_id: int = Query(0, description="Playlist ID (default: 0)")
+):
+    """
+    Generate an m3u8 playlist from TS segments
+    
+    This endpoint creates an HLS playlist by discovering available TS segments
+    and generating a valid m3u8 playlist that references them.
+    
+    The segments are accessed from: /segments/{username}/{password}/{stream_id}/{segment_number}.ts
+    """
+    service = get_playlist_service(playlist_id)
+    
+    if not service:
+        raise HTTPException(status_code=404, detail="No playlists available")
+    
+    # Segments use the same path for both series and movies
+    segments_base = f"{service.base_url}/segments/{service.username}/{service.password}/{stream_id}"
+    
+    # Discover available segments by checking segment URLs
+    segments = []
+    max_segments_to_check = 1000  # Reasonable limit
+    
+    print(f"Discovering segments for {stream_id}...")
+    
+    for i in range(max_segments_to_check):
+        segment_url = f"{segments_base}/{i}.ts"
+        try:
+            # Use HEAD request to check if segment exists (faster than GET)
+            response = service.session.head(segment_url, timeout=3, allow_redirects=True)
+            if response.status_code == 200:
+                content_type = response.headers.get('Content-Type', '').lower()
+                # Accept video/mp2t, application/octet-stream, or video/*
+                if 'video' in content_type or 'mp2t' in content_type or 'octet-stream' in content_type:
+                    segments.append(i)
+                else:
+                    # If we get a non-video response, we've probably reached the end
+                    break
+            elif response.status_code == 404:
+                # Segment doesn't exist, we've reached the end
+                break
+            else:
+                # Other status codes might indicate auth issues, but continue checking
+                # We'll stop if we get too many non-200 responses
+                if i > 10 and len(segments) == 0:
+                    # If first 10 segments all fail, probably no segments available
+                    break
+        except Exception as e:
+            # If request fails consistently, assume we've reached the end
+            if i > 10 and len(segments) == 0:
+                break
+            continue
+    
+    if not segments:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No segments found for stream_id {stream_id}. The content may not have HLS segments available. Try using the mp4 format instead."
+        )
+    
+    print(f"Found {len(segments)} segments")
+    
+    # Generate m3u8 playlist
+    m3u8_content = "#EXTM3U\n"
+    m3u8_content += "#EXT-X-VERSION:3\n"
+    m3u8_content += "#EXT-X-TARGETDURATION:10\n"
+    m3u8_content += "#EXT-X-MEDIA-SEQUENCE:0\n"
+    m3u8_content += "#EXT-X-PLAYLIST-TYPE:VOD\n"
+    
+    # Add each segment
+    for segment_num in segments:
+        segment_url = f"{segments_base}/{segment_num}.ts"
+        m3u8_content += f"#EXTINF:10.0,\n"
+        m3u8_content += f"{segment_url}\n"
+    
+    m3u8_content += "#EXT-X-ENDLIST\n"
+    
+    return Response(
+        content=m3u8_content,
+        media_type="application/vnd.apple.mpegurl",
+        headers={
+            'Content-Type': 'application/vnd.apple.mpegurl',
+            'Access-Control-Allow-Origin': '*',
+            'Cache-Control': 'no-cache',
+        }
+    )
 
 
 @router.get("/stream/test")

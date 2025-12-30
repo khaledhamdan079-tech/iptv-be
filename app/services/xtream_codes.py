@@ -296,7 +296,11 @@ class XtreamCodesService:
                 "is_direct": False
             })
         
-        # Add m3u8 and ts as fallback options (but container_ext is preferred)
+        # Note: Segments-based m3u8 will be added by the route handler
+        # We can't use backend URL here since we don't know it in the service
+        # The route will add this option when returning stream URLs
+        
+        # Add direct m3u8 and ts as fallback options
         urls.append({
             "url": f"{self.base_url}/movie/{self.username}/{self.password}/{stream_id}.m3u8",
             "format": "m3u8",
@@ -354,7 +358,11 @@ class XtreamCodesService:
                 "is_direct": False
             })
         
-        # Add m3u8 and ts as fallback options (but container_ext is preferred)
+        # Note: Segments-based m3u8 will be added by the route handler
+        # We can't use backend URL here since we don't know it in the service
+        # The route will add this option when returning stream URLs
+        
+        # Add direct m3u8 and ts as fallback options
         urls.append({
             "url": f"{self.base_url}/series/{self.username}/{self.password}/{episode_id}.m3u8",
             "format": "m3u8",
