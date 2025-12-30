@@ -298,13 +298,14 @@ class XtreamCodesService:
                 "quality": "original"
             })
         
-        # Direct source if available
+        # Prioritize direct_source if available (usually the actual working URL)
         if direct_source:
-            urls.append({
+            urls.insert(0, {
                 "url": direct_source,
                 "format": "direct",
                 "type": "direct",
-                "quality": "unknown"
+                "quality": "original",
+                "is_direct": True
             })
         
         return urls
@@ -319,7 +320,8 @@ class XtreamCodesService:
         Returns:
             List of dictionaries with stream URLs and metadata
         """
-        episode_id = episode.get('id', '')
+        # Try different possible ID fields
+        episode_id = episode.get('id', '') or episode.get('stream_id', '') or episode.get('episode_id', '')
         if not episode_id:
             return []
         
@@ -327,18 +329,30 @@ class XtreamCodesService:
         container_ext = episode.get('container_extension', 'm3u8')
         direct_source = episode.get('direct_source', '')
         
+        # Prioritize direct_source if available (usually the actual working URL)
+        if direct_source:
+            urls.append({
+                "url": direct_source,
+                "format": "direct",
+                "type": "direct",
+                "quality": "original",
+                "is_direct": True
+            })
+        
         # Standard Xtream Codes formats (prefer m3u8 for HLS streaming)
         urls.append({
             "url": f"{self.base_url}/series/{self.username}/{self.password}/{episode_id}.m3u8",
             "format": "m3u8",
             "type": "HLS",
-            "quality": "adaptive"
+            "quality": "adaptive",
+            "is_direct": False
         })
         urls.append({
             "url": f"{self.base_url}/series/{self.username}/{self.password}/{episode_id}.ts",
             "format": "ts",
             "type": "MPEG-TS",
-            "quality": "standard"
+            "quality": "standard",
+            "is_direct": False
         })
         
         # Using container extension if different
@@ -347,19 +361,51 @@ class XtreamCodesService:
                 "url": f"{self.base_url}/series/{self.username}/{self.password}/{episode_id}.{container_ext}",
                 "format": container_ext,
                 "type": "direct",
-                "quality": "original"
-            })
-        
-        # Direct source if available
-        if direct_source:
-            urls.append({
-                "url": direct_source,
-                "format": "direct",
-                "type": "direct",
-                "quality": "unknown"
+                "quality": "original",
+                "is_direct": False
             })
         
         return urls
+    
+    def test_stream_url(self, url: str) -> Dict[str, Any]:
+        """
+        Test if a stream URL is accessible and returns video content
+        
+        Args:
+            url: Stream URL to test
+        
+        Returns:
+            Dictionary with test results
+        """
+        try:
+            response = self.session.get(url, timeout=5, stream=True, allow_redirects=True)
+            content_type = response.headers.get('Content-Type', '').lower()
+            content_length = response.headers.get('Content-Length', '0')
+            
+            # Check if it's HTML (error page)
+            if 'text/html' in content_type:
+                return {
+                    "valid": False,
+                    "error": "Returns HTML instead of video",
+                    "content_type": content_type,
+                    "status_code": response.status_code
+                }
+            
+            # Check if it's a video stream
+            is_video = any(vtype in content_type for vtype in ['video/', 'application/vnd.apple.mpegurl', 'application/x-mpegurl'])
+            
+            return {
+                "valid": is_video or response.status_code == 200,
+                "content_type": content_type,
+                "status_code": response.status_code,
+                "content_length": content_length,
+                "is_video": is_video
+            }
+        except requests.exceptions.RequestException as e:
+            return {
+                "valid": False,
+                "error": str(e)
+            }
     
     def _get_extension(self) -> str:
         """Get default stream extension"""

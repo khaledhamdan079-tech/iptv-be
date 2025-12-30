@@ -2,8 +2,10 @@
 Xtream Codes API Routes
 Routes for accessing content via Xtream Codes playlists
 """
-from fastapi import APIRouter, Query, HTTPException
+from fastapi import APIRouter, Query, HTTPException, Request, Response
+from fastapi.responses import StreamingResponse
 from typing import Optional, Literal
+import requests
 from app.services.xtream_codes import XtreamCodesService
 from app.services.maso_api import MasoAPIService
 
@@ -281,14 +283,33 @@ async def get_movie_stream_url(
     # Get stream URLs using the vod_id as stream_id
     stream_urls = service.get_movie_stream_url(movie=vod_info, stream_id=vod_id)
     
-    # Find recommended URL (prefer m3u8)
-    recommended = next((url for url in stream_urls if url.get('format') == 'm3u8'), None)
+    # Check if direct_source is available in movie info (usually the working URL)
+    movie_info = vod_info.get('info', {})
+    direct_source_url = movie_info.get('direct_source', '')
+    if direct_source_url and not any(url.get('url') == direct_source_url for url in stream_urls):
+        # Add direct_source as first option if not already included
+        stream_urls.insert(0, {
+            "url": direct_source_url,
+            "format": "direct",
+            "type": "direct",
+            "quality": "original",
+            "is_direct": True
+        })
+    
+    # Find recommended URL (prioritize direct_source, then m3u8)
+    recommended = next((url for url in stream_urls if url.get('is_direct')), None)
+    if not recommended:
+        recommended = next((url for url in stream_urls if url.get('format') == 'm3u8'), None)
     if not recommended and stream_urls:
         recommended = stream_urls[0]
     
     return {
         "success": True,
         "vod_id": vod_id,
+        "movie_data": {
+            "direct_source": direct_source_url,
+            "container_extension": movie_info.get('container_extension')
+        },
         "stream_urls": stream_urls,
         "recommended_url": recommended.get('url') if recommended else None,
         "recommended_format": recommended.get('format') if recommended else None
@@ -333,8 +354,22 @@ async def get_episode_stream_url(
     # Get stream URLs
     stream_urls = service.get_episode_stream_url(episode)
     
-    # Find recommended URL (prefer m3u8)
-    recommended = next((url for url in stream_urls if url.get('format') == 'm3u8'), None)
+    # Check if direct_source is available (usually the working URL)
+    direct_source_url = episode.get('direct_source', '')
+    if direct_source_url and not any(url.get('url') == direct_source_url for url in stream_urls):
+        # Add direct_source as first option if not already included
+        stream_urls.insert(0, {
+            "url": direct_source_url,
+            "format": "direct",
+            "type": "direct",
+            "quality": "original",
+            "is_direct": True
+        })
+    
+    # Find recommended URL (prioritize direct_source, then m3u8)
+    recommended = next((url for url in stream_urls if url.get('is_direct')), None)
+    if not recommended:
+        recommended = next((url for url in stream_urls if url.get('format') == 'm3u8'), None)
     if not recommended and stream_urls:
         recommended = stream_urls[0]
     
@@ -343,9 +378,96 @@ async def get_episode_stream_url(
         "series_id": series_id,
         "season": season_number,
         "episode": episode_number,
+        "episode_data": {
+            "id": episode.get('id'),
+            "direct_source": direct_source_url,
+            "container_extension": episode.get('container_extension')
+        },
         "stream_urls": stream_urls,
         "recommended_url": recommended.get('url') if recommended else None,
         "recommended_format": recommended.get('format') if recommended else None
+    }
+
+
+@router.get("/stream/proxy")
+async def proxy_stream(
+    url: str = Query(..., description="Stream URL to proxy"),
+    playlist_id: int = Query(0, description="Playlist ID (default: 0)")
+):
+    """Proxy stream URL through backend to handle authentication
+    
+    This endpoint fetches the stream from Xtream Codes and forwards it to the client.
+    Use this when direct stream URLs return HTML instead of video.
+    """
+    service = get_playlist_service(playlist_id)
+    
+    if not service:
+        raise HTTPException(status_code=404, detail="No playlists available")
+    
+    try:
+        # Fetch the stream with authentication
+        response = service.session.get(
+            url,
+            stream=True,
+            timeout=30,
+            allow_redirects=True
+        )
+        response.raise_for_status()
+        
+        # Check if it's actually a video stream
+        content_type = response.headers.get('Content-Type', '').lower()
+        if 'text/html' in content_type:
+            raise HTTPException(
+                status_code=400,
+                detail="Stream URL returns HTML instead of video. Try using direct_source URL."
+            )
+        
+        # Forward the stream
+        def generate():
+            try:
+                for chunk in response.iter_content(chunk_size=8192):
+                    if chunk:
+                        yield chunk
+            finally:
+                response.close()
+        
+        # Determine content type
+        headers = {}
+        if content_type:
+            headers['Content-Type'] = content_type
+        
+        # Copy relevant headers
+        for header in ['Content-Length', 'Accept-Ranges', 'Content-Range']:
+            if header in response.headers:
+                headers[header] = response.headers[header]
+        
+        return StreamingResponse(
+            generate(),
+            media_type=content_type or 'application/octet-stream',
+            headers=headers
+        )
+        
+    except requests.exceptions.RequestException as e:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch stream: {str(e)}")
+
+
+@router.get("/stream/test")
+async def test_stream_url(
+    url: str = Query(..., description="Stream URL to test"),
+    playlist_id: int = Query(0, description="Playlist ID (default: 0)")
+):
+    """Test if a stream URL is accessible and returns video content"""
+    service = get_playlist_service(playlist_id)
+    
+    if not service:
+        raise HTTPException(status_code=404, detail="No playlists available")
+    
+    result = service.test_stream_url(url)
+    
+    return {
+        "success": True,
+        "url": url,
+        "test_result": result
     }
 
 

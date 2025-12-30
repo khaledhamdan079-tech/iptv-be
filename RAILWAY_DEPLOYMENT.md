@@ -20,15 +20,29 @@ The Flutter app has been moved to a separate directory. The Python backend is re
 4. Connect your repository
 5. Select the Python backend directory
 
-### 3. Configure Environment Variables
+### 3. Configure Start Command
 
-In Railway dashboard, add these environment variables:
+**Important**: Railway needs to know how to start your application.
 
-```
-PORT=3000
-```
+**Option 1: Automatic (Recommended)**
+- Railway should automatically detect the `Procfile` or `railway.json`
+- If it doesn't, go to your service settings → "Settings" tab
+- Under "Start Command", enter: `python run.py`
 
-Railway will automatically provide a `PORT` environment variable, but you can set it explicitly.
+**Option 2: Manual Configuration**
+1. Go to your Railway project dashboard
+2. Click on your service
+3. Go to "Settings" tab
+4. Scroll to "Deploy" section
+5. Set "Start Command" to: `python run.py`
+6. Save changes
+
+### 4. Configure Environment Variables
+
+Railway will automatically provide a `PORT` environment variable. You don't need to set it manually, but if you want to override it:
+
+1. Go to your service → "Variables" tab
+2. Add: `PORT=3000` (optional, Railway sets this automatically)
 
 ### 4. Update run.py for Railway
 
@@ -67,7 +81,7 @@ Or use `railway.json`:
 }
 ```
 
-### 6. Create requirements.txt
+### 6. Verify requirements.txt
 
 Ensure `requirements.txt` includes all dependencies:
 
