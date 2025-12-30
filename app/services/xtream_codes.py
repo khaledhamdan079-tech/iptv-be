@@ -8,9 +8,9 @@ import json
 from urllib.parse import urlparse, urljoin
 from cachetools import TTLCache
 
-# Cache for movies and series lists (10 minutes = 600 seconds)
-# Cache key format: "vod_{category_id}" or "series_{category_id}" or "vod_None" for all
-_content_cache = TTLCache(maxsize=50, ttl=600)
+# Cache for movies, series, and live TV lists (10 minutes = 600 seconds)
+# Cache key format: "vod_{category_id}", "series_{category_id}", "live_{category_id}", or "live_categories"
+_content_cache = TTLCache(maxsize=100, ttl=600)  # Increased maxsize for live TV
 
 class XtreamCodesService:
     """Service for interacting with Xtream Codes API"""
@@ -56,11 +56,20 @@ class XtreamCodesService:
         """
         Get live TV categories
         """
+        # Check cache first (categories change less frequently)
+        cache_key = "live_categories"
+        if cache_key in _content_cache:
+            return _content_cache[cache_key]
+        
         try:
             url = self._get_api_url("get_live_categories")
             response = self.session.get(url, timeout=10)
             response.raise_for_status()
-            return response.json()
+            categories = response.json()
+            
+            # Cache the result (30 minutes for categories)
+            _content_cache[cache_key] = categories
+            return categories
         except requests.exceptions.RequestException as e:
             return []
     
@@ -71,15 +80,107 @@ class XtreamCodesService:
         Args:
             category_id: Optional category ID to filter streams
         """
+        # Check cache first
+        cache_key = f"live_{category_id or 'all'}"
+        if cache_key in _content_cache:
+            return _content_cache[cache_key]
+        
         try:
             url = self._get_api_url("get_live_streams")
             if category_id:
                 url += f"&category_id={category_id}"
+            response = self.session.get(url, timeout=30)  # Increased timeout for large lists
+            response.raise_for_status()
+            streams = response.json()
+            
+            # Cache the result
+            _content_cache[cache_key] = streams
+            return streams
+        except requests.exceptions.RequestException as e:
+            return []
+    
+    def get_live_info(self, stream_id: str) -> Dict[str, Any]:
+        """
+        Get information for a specific live TV stream
+        
+        Args:
+            stream_id: Stream ID
+        """
+        try:
+            url = self._get_api_url("get_live_info")
+            url += f"&stream_id={stream_id}"
             response = self.session.get(url, timeout=10)
             response.raise_for_status()
             return response.json()
         except requests.exceptions.RequestException as e:
-            return []
+            return {}
+    
+    def get_live_stream_url(self, stream_id: str, format: str = "m3u8") -> List[Dict[str, str]]:
+        """
+        Get all possible stream URLs for a live TV channel
+        
+        Args:
+            stream_id: Stream ID
+            format: Preferred format (m3u8 or ts)
+        
+        Returns:
+            List of dictionaries with stream URLs and metadata
+        """
+        urls = []
+        
+        # Live streams typically use m3u8 or ts format
+        if format == "m3u8" or format == "ts":
+            urls.append({
+                "url": f"{self.base_url}/live/{self.username}/{self.password}/{stream_id}.{format}",
+                "format": format,
+                "type": "HLS" if format == "m3u8" else "MPEG-TS",
+                "quality": "adaptive" if format == "m3u8" else "standard",
+                "is_direct": False
+            })
+        
+        # Always include both formats
+        if format != "m3u8":
+            urls.append({
+                "url": f"{self.base_url}/live/{self.username}/{self.password}/{stream_id}.m3u8",
+                "format": "m3u8",
+                "type": "HLS",
+                "quality": "adaptive",
+                "is_direct": False
+            })
+        if format != "ts":
+            urls.append({
+                "url": f"{self.base_url}/live/{self.username}/{self.password}/{stream_id}.ts",
+                "format": "ts",
+                "type": "MPEG-TS",
+                "quality": "standard",
+                "is_direct": False
+            })
+        
+        return urls
+    
+    def get_epg(self, stream_id: str = None) -> Dict[str, Any]:
+        """
+        Get EPG (Electronic Program Guide) data
+        
+        Args:
+            stream_id: Optional stream ID to get EPG for specific channel
+        
+        Returns:
+            EPG data (may be empty if not available)
+        """
+        try:
+            if stream_id:
+                # Get short EPG for specific stream
+                url = self._get_api_url("get_short_epg")
+                url += f"&stream_id={stream_id}"
+            else:
+                # Get all EPG data
+                url = self._get_api_url("get_short_epg")
+            response = self.session.get(url, timeout=10)
+            response.raise_for_status()
+            return response.json()
+        except requests.exceptions.RequestException as e:
+            return {"epg_listings": []}
     
     def get_vod_categories(self) -> List[Dict[str, Any]]:
         """
