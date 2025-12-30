@@ -862,7 +862,18 @@ async def proxy_stream(
                         
                         from urllib.parse import urljoin, urlparse
                         base_parsed = urlparse(url)
-                        base_url_for_join = f"{base_parsed.scheme}://{base_parsed.netloc}{'/'.join(base_parsed.path.split('/')[:-1])}/"
+                        # For absolute paths (starting with /), use server root
+                        # For relative paths, use the m3u8 directory
+                        server_root = f"{base_parsed.scheme}://{base_parsed.netloc}"
+                        m3u8_dir = f"{server_root}{'/'.join(base_parsed.path.split('/')[:-1])}/"
+                        
+                        # Extract token from original URL if present (for TS segments)
+                        token_param = ''
+                        if 'token=' in url:
+                            from urllib.parse import parse_qs
+                            query_params = parse_qs(base_parsed.query)
+                            if 'token' in query_params:
+                                token_param = f"?token={query_params['token'][0]}"
                         
                         for line in lines:
                             # Skip empty lines and comments (unless they contain URLs)
@@ -879,7 +890,21 @@ async def proxy_stream(
                                     # If relative URL, make it absolute
                                     # This ensures the player can fetch TS segments correctly
                                     if not segment_url.startswith('http://') and not segment_url.startswith('https://'):
-                                        absolute_url = urljoin(base_url_for_join, segment_url)
+                                        # Absolute paths (starting with /) use server root
+                                        # Relative paths use m3u8 directory
+                                        if segment_url.startswith('/'):
+                                            absolute_url = urljoin(server_root, segment_url)
+                                        else:
+                                            absolute_url = urljoin(m3u8_dir, segment_url)
+                                        
+                                        # Add token to TS segment URLs if we have one
+                                        if token_param and (segment_url.endswith('.ts') or '.ts?' in segment_url):
+                                            # Check if URL already has query params
+                                            if '?' in absolute_url:
+                                                absolute_url += f"&{token_param.lstrip('?')}"
+                                            else:
+                                                absolute_url += token_param
+                                        
                                         rewritten_lines.append(absolute_url)
                                     else:
                                         rewritten_lines.append(segment_url)

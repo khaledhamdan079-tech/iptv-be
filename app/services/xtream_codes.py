@@ -407,19 +407,38 @@ class XtreamCodesService:
                     # IMPORTANT: Use the Location URL as-is (it may be a different IP)
                     # The redirect URL is already complete and absolute
                     if location.startswith('http://') or location.startswith('https://'):
+                        print(f"✅ Token extracted successfully for {stream_id} ({stream_type})")
                         return location
                     else:
                         # Relative URL, make it absolute based on original request URL
                         from urllib.parse import urlparse, urljoin
-                        return urljoin(base_url, location)
+                        absolute_location = urljoin(base_url, location)
+                        print(f"✅ Token extracted successfully (relative) for {stream_id} ({stream_type})")
+                        return absolute_location
+                else:
+                    print(f"⚠️ Redirect received but no token in Location header for {stream_id} ({stream_type})")
+            elif response.status_code == 200:
+                # Some servers return 200 with token in response body or headers
+                # Check if token is in response headers
+                location = response.headers.get('Location', '')
+                if location and 'token=' in location:
+                    if location.startswith('http://') or location.startswith('https://'):
+                        print(f"✅ Token found in 200 response Location header for {stream_id} ({stream_type})")
+                        return location
+                print(f"⚠️ Got 200 response (no redirect) for {stream_id} ({stream_type}) - token may not be required")
+            else:
+                print(f"⚠️ Unexpected status code {response.status_code} for {stream_id} ({stream_type})")
             
             # If no redirect or no token, return base URL (fallback)
+            print(f"⚠️ No token extracted for {stream_id} ({stream_type}), using base URL")
             return base_url
             
         except Exception as e:
             # If token extraction fails, return base URL without token
             # Log error for debugging but don't fail
-            print(f"Warning: Could not extract token for {base_url}: {e}")
+            print(f"❌ Error extracting token for {base_url}: {e}")
+            import traceback
+            traceback.print_exc()
             return base_url
     
     def get_movie_stream_url(self, movie: Dict[str, Any] = None, stream_id: str = None) -> List[Dict[str, str]]:
