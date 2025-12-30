@@ -12,12 +12,53 @@ from app.services.maso_api import MasoAPIService
 
 router = APIRouter(prefix="/api/xtream", tags=["xtream"])
 
-maso_service = MasoAPIService()
+# Lazy-load maso_service to avoid blocking startup
+_maso_service = None
+_playlists_cache = None
+_playlists_cache_time = None
+_PLAYLISTS_CACHE_TTL = 300  # 5 minutes
 
+def get_maso_service():
+    """Lazy-load MasoAPIService to avoid blocking startup"""
+    global _maso_service
+    if _maso_service is None:
+        _maso_service = MasoAPIService()
+    return _maso_service
 
 def get_playlist_service(playlist_id: int = 0) -> Optional[XtreamCodesService]:
     """Get Xtream Codes service from Maso playlist URLs"""
-    playlists = maso_service.get_playlist_urls()
+    import time
+    
+    global _playlists_cache, _playlists_cache_time
+    
+    # Check cache first
+    current_time = time.time()
+    if _playlists_cache is not None and _playlists_cache_time is not None:
+        if current_time - _playlists_cache_time < _PLAYLISTS_CACHE_TTL:
+            playlists = _playlists_cache
+        else:
+            # Cache expired
+            _playlists_cache = None
+            _playlists_cache_time = None
+            playlists = None
+    else:
+        playlists = None
+    
+    # Fetch if not cached
+    if playlists is None:
+        try:
+            maso_service = get_maso_service()
+            playlists = maso_service.get_playlist_urls()
+            # Cache the result
+            _playlists_cache = playlists
+            _playlists_cache_time = current_time
+        except Exception as e:
+            print(f"Error fetching playlists: {e}")
+            # Use cached data if available, even if expired
+            if _playlists_cache is not None:
+                playlists = _playlists_cache
+            else:
+                return None
     
     if not playlists:
         return None
@@ -50,15 +91,26 @@ def get_playlist_service(playlist_id: int = 0) -> Optional[XtreamCodesService]:
 @router.get("/playlists")
 async def get_playlists():
     """Get available Xtream Codes playlists from Maso API"""
-    playlists = maso_service.get_playlist_urls()
-    
-    return {
-        "success": True,
-        "data": {
-            "playlists": playlists,
-            "count": len(playlists)
+    try:
+        maso_service = get_maso_service()
+        playlists = maso_service.get_playlist_urls()
+        
+        return {
+            "success": True,
+            "data": {
+                "playlists": playlists,
+                "count": len(playlists) if playlists else 0
+            }
         }
-    }
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e),
+            "data": {
+                "playlists": [],
+                "count": 0
+            }
+        }
 
 
 @router.get("/user-info")

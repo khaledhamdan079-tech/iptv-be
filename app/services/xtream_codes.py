@@ -6,6 +6,11 @@ import requests
 from typing import Dict, List, Optional, Any
 import json
 from urllib.parse import urlparse, urljoin
+from cachetools import TTLCache
+
+# Cache for movies and series lists (10 minutes = 600 seconds)
+# Cache key format: "vod_{category_id}" or "series_{category_id}" or "vod_None" for all
+_content_cache = TTLCache(maxsize=50, ttl=600)
 
 class XtreamCodesService:
     """Service for interacting with Xtream Codes API"""
@@ -80,11 +85,20 @@ class XtreamCodesService:
         """
         Get VOD (Video on Demand) categories (Movies/Series)
         """
+        # Cache categories for longer (30 minutes)
+        cache_key = f"vod_categories_{self.base_url}"
+        if cache_key in _content_cache:
+            return _content_cache[cache_key]
+        
         try:
             url = self._get_api_url("get_vod_categories")
             response = self.session.get(url, timeout=10)
             response.raise_for_status()
-            return response.json()
+            categories = response.json()
+            
+            # Cache for 30 minutes (1800 seconds) - categories don't change often
+            _content_cache[cache_key] = categories
+            return categories
         except requests.exceptions.RequestException as e:
             return []
     
@@ -95,6 +109,11 @@ class XtreamCodesService:
         Args:
             category_id: Optional category ID to filter streams
         """
+        # Check cache first
+        cache_key = f"vod_{category_id or 'all'}_{self.base_url}"
+        if cache_key in _content_cache:
+            return _content_cache[cache_key]
+        
         try:
             url = self._get_api_url("get_vod_streams")
             if category_id:
@@ -102,7 +121,11 @@ class XtreamCodesService:
             # Increased timeout for large data fetches (30 seconds)
             response = self.session.get(url, timeout=30)
             response.raise_for_status()
-            return response.json()
+            movies = response.json()
+            
+            # Cache the result
+            _content_cache[cache_key] = movies
+            return movies
         except requests.exceptions.Timeout:
             print(f"Timeout fetching VOD streams (category: {category_id})")
             return []
@@ -114,11 +137,20 @@ class XtreamCodesService:
         """
         Get series categories
         """
+        # Cache categories for longer (30 minutes)
+        cache_key = f"series_categories_{self.base_url}"
+        if cache_key in _content_cache:
+            return _content_cache[cache_key]
+        
         try:
             url = self._get_api_url("get_series_categories")
             response = self.session.get(url, timeout=10)
             response.raise_for_status()
-            return response.json()
+            categories = response.json()
+            
+            # Cache for 30 minutes (1800 seconds) - categories don't change often
+            _content_cache[cache_key] = categories
+            return categories
         except requests.exceptions.RequestException as e:
             return []
     
@@ -129,6 +161,11 @@ class XtreamCodesService:
         Args:
             category_id: Optional category ID to filter series
         """
+        # Check cache first
+        cache_key = f"series_{category_id or 'all'}_{self.base_url}"
+        if cache_key in _content_cache:
+            return _content_cache[cache_key]
+        
         try:
             url = self._get_api_url("get_series")
             if category_id:
@@ -136,7 +173,11 @@ class XtreamCodesService:
             # Increased timeout for large data fetches (30 seconds)
             response = self.session.get(url, timeout=30)
             response.raise_for_status()
-            return response.json()
+            series = response.json()
+            
+            # Cache the result
+            _content_cache[cache_key] = series
+            return series
         except requests.exceptions.Timeout:
             print(f"Timeout fetching series (category: {category_id})")
             return []

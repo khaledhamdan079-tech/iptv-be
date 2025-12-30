@@ -1,96 +1,139 @@
-# Railway Deployment Troubleshooting
+# Railway Troubleshooting Guide
 
-## "No start command was found" Error
+## Server Not Responding / Slow Startup
 
-If you see this error, Railway doesn't know how to start your application. Here's how to fix it:
+### 1. Check Railway Logs
 
-### Solution 1: Set Start Command in Railway Dashboard
-
-1. Go to your Railway project: https://railway.app
+In Railway dashboard:
+1. Go to your project
 2. Click on your service
-3. Go to the **"Settings"** tab
-4. Scroll down to the **"Deploy"** section
-5. Find **"Start Command"** field
-6. Enter: `python run.py`
-7. Click **"Save"** or **"Deploy"**
+3. Click "Deployments" tab
+4. Click on the latest deployment
+5. Click "View Logs"
 
-### Solution 2: Verify Procfile
+Look for:
+- Errors during startup
+- Timeout errors
+- Memory/CPU limits
+- Import errors
 
-The project includes a `Procfile` with:
-```
-web: python run.py
-```
+### 2. Common Issues
 
-Make sure this file is in the root directory and committed to Git.
+#### Issue: Server takes too long to start
+**Solution:**
+- The server now uses lazy loading for Maso API calls
+- Playlists are cached for 5 minutes
+- Check if there are network timeouts in logs
 
-### Solution 3: Check railway.json
+#### Issue: 499 Client Closed Request
+**Solution:**
+- Railway has a 30-second timeout for HTTP requests
+- Large data fetches are now cached
+- Timeouts increased to 30 seconds for API calls
 
-The project includes `railway.json` with:
-```json
-{
-  "deploy": {
-    "startCommand": "python run.py"
-  }
-}
-```
+#### Issue: Memory/CPU Limits
+**Solution:**
+- Check Railway resource usage in dashboard
+- Free tier has limited resources
+- Consider upgrading if needed
 
-### Solution 4: Manual Start Command via Railway CLI
+### 3. Quick Health Check
 
-If using Railway CLI:
+Test these endpoints to verify server is running:
+
 ```bash
-railway variables set START_COMMAND="python run.py"
+# Health check (should be instant)
+curl https://your-app.railway.app/health
+
+# Root endpoint (should be instant)
+curl https://your-app.railway.app/
+
+# Swagger UI
+https://your-app.railway.app/docs
 ```
 
-## Other Common Issues
+### 4. Restart the Service
 
-### Port Binding Errors
+In Railway dashboard:
+1. Go to your service
+2. Click "Settings"
+3. Click "Restart" button
 
-Railway automatically sets the `PORT` environment variable. The `run.py` file already uses it:
-```python
-port = int(os.environ.get("PORT", 3000))
+### 5. Check Environment Variables
+
+Make sure these are set (if needed):
+- `PORT` - Automatically set by Railway
+- Any API keys or credentials
+
+### 6. View Real-time Logs
+
+In Railway dashboard:
+1. Go to your service
+2. Click "Logs" tab
+3. Watch for errors in real-time
+
+### 7. Common Error Messages
+
+#### "No start command was found"
+- Check `Procfile` exists with: `web: python run.py`
+- Or set start command in Railway dashboard: `Settings > Deploy > Start Command`
+
+#### "Module not found"
+- Check `requirements.txt` includes all dependencies
+- Railway should auto-install, but verify in build logs
+
+#### "Port already in use"
+- Railway sets PORT automatically, don't hardcode it
+- Use `os.environ.get("PORT", 3000)` in code
+
+### 8. Performance Optimization
+
+The server now includes:
+- ✅ Lazy loading of Maso API service (no blocking on startup)
+- ✅ Caching of playlists (5 min TTL)
+- ✅ Caching of movies/series lists (10 min TTL)
+- ✅ Async request handling
+- ✅ Increased timeouts for slow APIs
+
+### 9. Force Rebuild
+
+If issues persist:
+1. Go to Railway dashboard
+2. Click on your service
+3. Click "Settings"
+4. Click "Clear Build Cache"
+5. Redeploy
+
+### 10. Check Railway Status
+
+Visit: https://status.railway.app/
+- Check if Railway is experiencing issues
+- Check service status
+
+## Debugging Commands
+
+### Local Testing
+```bash
+# Test server locally
+python run.py
+
+# Check if server starts quickly
+time python run.py
 ```
 
-If you see port errors, make sure you're using `0.0.0.0` as the host (already configured).
+### Check Dependencies
+```bash
+# Verify all packages are installed
+pip list
 
-### Dependencies Not Found
+# Check for missing imports
+python -c "from app.main import app; print('OK')"
+```
 
-Make sure `requirements.txt` is in the root directory and includes all dependencies:
-- fastapi
-- uvicorn[standard]
-- requests
-- beautifulsoup4
-- lxml
-- etc.
+## Contact Support
 
-### Build Failures
-
-1. Check Railway build logs for specific errors
-2. Ensure Python version is compatible (3.8+)
-3. Check that all dependencies in `requirements.txt` are valid
-
-### Application Not Starting
-
-1. Check Railway logs: Service → "Deployments" → Click on deployment → "View Logs"
-2. Verify the start command is correct
-3. Check that `run.py` exists and is executable
-4. Ensure `app/main.py` exists and is valid
-
-## Quick Fix Checklist
-
-- [ ] Start command set in Railway dashboard: `python run.py`
-- [ ] `Procfile` exists in root: `web: python run.py`
-- [ ] `railway.json` exists with start command
-- [ ] `requirements.txt` is in root directory
-- [ ] `run.py` exists and is valid
-- [ ] `app/main.py` exists and is valid
-- [ ] All files committed to Git
-- [ ] Railway service is connected to GitHub repo
-
-## Still Having Issues?
-
-1. Check Railway logs for specific error messages
-2. Verify all files are pushed to GitHub
-3. Try redeploying: Service → "Deployments" → "Redeploy"
-4. Check Railway status page: https://status.railway.app
-
-
+If issues persist:
+1. Check Railway logs for specific errors
+2. Check Railway status page
+3. Review this troubleshooting guide
+4. Check GitHub issues (if applicable)
