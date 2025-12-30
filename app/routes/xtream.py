@@ -398,6 +398,9 @@ async def proxy_stream(
     
     This endpoint fetches the stream from Xtream Codes and forwards it to the client.
     Use this when direct stream URLs return HTML instead of video.
+    
+    Note: Even if initial response is HTML, we'll try to forward it as the video player
+    might handle redirects or the server might serve video after authentication.
     """
     service = get_playlist_service(playlist_id)
     
@@ -405,48 +408,106 @@ async def proxy_stream(
         raise HTTPException(status_code=404, detail="No playlists available")
     
     try:
-        # Fetch the stream with authentication
+        # Fetch the stream with authentication and proper headers
+        # Use the service's session which has authentication configured
         response = service.session.get(
             url,
             stream=True,
             timeout=30,
-            allow_redirects=True
+            allow_redirects=True,
+            headers={
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                'Accept': '*/*',
+                'Accept-Language': 'en-US,en;q=0.9',
+                'Referer': url.split('/series/')[0] if '/series/' in url else url.split('/movie/')[0] if '/movie/' in url else '',
+            }
         )
-        response.raise_for_status()
         
-        # Check if it's actually a video stream
-        content_type = response.headers.get('Content-Type', '').lower()
-        if 'text/html' in content_type:
+        # Check status code first
+        if response.status_code != 200:
+            response.close()
             raise HTTPException(
-                status_code=400,
-                detail="Stream URL returns HTML instead of video. Try using direct_source URL."
+                status_code=response.status_code,
+                detail=f"Stream server returned status {response.status_code}. The URL may require authentication or the stream may be unavailable."
             )
+        
+        # Check content type
+        content_type = response.headers.get('Content-Type', '').lower()
+        
+        # Check if it's HTML - read first chunk to verify
+        first_chunk = None
+        if 'text/html' in content_type:
+            # Read first chunk to check if it's actually HTML
+            try:
+                first_chunk = next(response.iter_content(chunk_size=512), b'')
+                if first_chunk:
+                    content_preview = first_chunk.decode('utf-8', errors='ignore').lower()
+                    # Check if it looks like HTML
+                    if '<html' in content_preview or '<!doctype' in content_preview:
+                        response.close()
+                        raise HTTPException(
+                            status_code=400,
+                            detail="Stream URL returns HTML instead of video. The URL may require different authentication or the stream may be unavailable. Please check if the episode has a direct_source URL available in the episode_data field."
+                        )
+            except StopIteration:
+                response.close()
+                raise HTTPException(
+                    status_code=400,
+                    detail="Stream URL returned empty response"
+                )
+            except Exception as e:
+                # If we can't read, close and re-raise
+                response.close()
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Error reading stream: {str(e)}"
+                )
         
         # Forward the stream
         def generate():
             try:
+                # If we read first chunk, yield it first
+                if first_chunk:
+                    yield first_chunk
+                
                 for chunk in response.iter_content(chunk_size=8192):
                     if chunk:
                         yield chunk
             finally:
                 response.close()
         
-        # Determine content type
-        headers = {}
-        if content_type:
-            headers['Content-Type'] = content_type
+        # Determine content type - prefer video types
+        media_type = content_type
+        if not media_type or 'text/html' in media_type:
+            # Try to determine from URL
+            if '.m3u8' in url:
+                media_type = 'application/vnd.apple.mpegurl'
+            elif '.ts' in url:
+                media_type = 'video/mp2t'
+            else:
+                media_type = 'application/octet-stream'
         
-        # Copy relevant headers
-        for header in ['Content-Length', 'Accept-Ranges', 'Content-Range']:
+        # Set headers
+        headers = {
+            'Content-Type': media_type,
+            'Access-Control-Allow-Origin': '*',
+            'Access-Control-Allow-Methods': 'GET, HEAD, OPTIONS',
+            'Access-Control-Allow-Headers': '*',
+        }
+        
+        # Copy relevant headers from response
+        for header in ['Content-Length', 'Accept-Ranges', 'Content-Range', 'Cache-Control']:
             if header in response.headers:
                 headers[header] = response.headers[header]
         
         return StreamingResponse(
             generate(),
-            media_type=content_type or 'application/octet-stream',
+            media_type=media_type,
             headers=headers
         )
         
+    except HTTPException:
+        raise
     except requests.exceptions.RequestException as e:
         raise HTTPException(status_code=500, detail=f"Failed to fetch stream: {str(e)}")
 
