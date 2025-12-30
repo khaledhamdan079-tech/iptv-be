@@ -426,6 +426,27 @@ class XtreamCodesService:
                         print(f"✅ Token found in 200 response Location header for {stream_id} ({stream_type})")
                         return location
                 print(f"⚠️ Got 200 response (no redirect) for {stream_id} ({stream_type}) - token may not be required")
+            elif response.status_code == 401:
+                # 401 - try with allow_redirects=True to follow redirects
+                print(f"⚠️ Got 401, trying with allow_redirects=True for {stream_id} ({stream_type})")
+                try:
+                    redirect_response = self.session.get(
+                        base_url,
+                        allow_redirects=True,
+                        timeout=15,
+                        headers={
+                            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                            'Accept': '*/*',
+                        }
+                    )
+                    final_url = str(redirect_response.url)
+                    if 'token=' in final_url:
+                        print(f"✅ Token extracted via redirect for {stream_id} ({stream_type})")
+                        redirect_response.close()
+                        return final_url
+                    redirect_response.close()
+                except Exception as redirect_error:
+                    print(f"⚠️ Redirect attempt failed: {redirect_error}")
             else:
                 print(f"⚠️ Unexpected status code {response.status_code} for {stream_id} ({stream_type})")
             

@@ -679,37 +679,102 @@ async def proxy_stream(
             # If we get 200 directly, we can use it
             initial_response.close()
         elif initial_response.status_code == 401:
-            # 401 Unauthorized - try to get token by following redirects
-            # Some servers return 401 first, then redirect with token
+            # 401 Unauthorized - try to extract token using the service's token extraction method
             initial_response.close()
-            # Try one more time with allow_redirects=True to see if we get a redirect
-            try:
-                redirect_response = service.session.get(
-                    url,
-                    stream=False,
-                    timeout=30,
-                    allow_redirects=True,
-                    headers=initial_headers
-                )
-                if redirect_response.status_code == 200:
-                    # Got 200 after redirect, check if final URL has token
-                    final_url = redirect_response.url
-                    if 'token=' in str(final_url):
-                        url = str(final_url)
-                    redirect_response.close()
-                else:
-                    redirect_response.close()
+            
+            # Parse the URL to extract stream_id and type
+            from urllib.parse import urlparse, parse_qs
+            parsed = urlparse(url)
+            path_parts = parsed.path.strip('/').split('/')
+            
+            # Try to extract stream_id from URL pattern: /live/username/password/stream_id.m3u8
+            # or /movie/username/password/stream_id.ext
+            stream_id = None
+            stream_type = None
+            
+            if len(path_parts) >= 4:
+                # Pattern: /live/username/password/stream_id.m3u8
+                if path_parts[0] in ['live', 'movie', 'series']:
+                    stream_type = path_parts[0]
+                    # Get the last part and remove extension
+                    last_part = path_parts[-1]
+                    if '.' in last_part:
+                        stream_id = last_part.rsplit('.', 1)[0]
+                    else:
+                        stream_id = last_part
+                
+                # Get extension
+                extension = None
+                if '.' in path_parts[-1]:
+                    extension = path_parts[-1].rsplit('.', 1)[1]
+            
+            # If we can extract stream_id, try to get tokenized URL
+            if stream_id and stream_type:
+                try:
+                    print(f"Attempting to extract token for {stream_type} stream_id={stream_id}")
+                    tokenized_url = service.get_stream_url_with_token(stream_id, stream_type, extension)
+                    if tokenized_url and 'token=' in tokenized_url:
+                        print(f"✅ Successfully extracted token, using: {tokenized_url[:100]}...")
+                        url = tokenized_url
+                    else:
+                        print(f"⚠️ Token extraction returned URL without token, using original")
+                except Exception as token_error:
+                    print(f"⚠️ Token extraction failed: {token_error}, will try redirect method")
+                    # Fall back to redirect method
+                    try:
+                        redirect_response = service.session.get(
+                            url,
+                            stream=False,
+                            timeout=30,
+                            allow_redirects=True,
+                            headers=initial_headers
+                        )
+                        if redirect_response.status_code == 200:
+                            final_url = redirect_response.url
+                            if 'token=' in str(final_url):
+                                url = str(final_url)
+                            redirect_response.close()
+                        else:
+                            redirect_response.close()
+                            raise HTTPException(
+                                status_code=401,
+                                detail=f"Stream server returned status 401 (Unauthorized). Authentication may be required."
+                            )
+                    except HTTPException:
+                        raise
+                    except Exception as e:
+                        raise HTTPException(
+                            status_code=401,
+                            detail=f"Stream server returned status 401 (Unauthorized). Error: {str(e)}"
+                        )
+            else:
+                # Can't extract stream_id, try redirect method
+                try:
+                    redirect_response = service.session.get(
+                        url,
+                        stream=False,
+                        timeout=30,
+                        allow_redirects=True,
+                        headers=initial_headers
+                    )
+                    if redirect_response.status_code == 200:
+                        final_url = redirect_response.url
+                        if 'token=' in str(final_url):
+                            url = str(final_url)
+                        redirect_response.close()
+                    else:
+                        redirect_response.close()
+                        raise HTTPException(
+                            status_code=401,
+                            detail=f"Stream server returned status 401 (Unauthorized). Authentication may be required."
+                        )
+                except HTTPException:
+                    raise
+                except Exception as e:
                     raise HTTPException(
                         status_code=401,
-                        detail=f"Stream server returned status 401 (Unauthorized). Authentication may be required."
+                        detail=f"Stream server returned status 401 (Unauthorized). Error: {str(e)}"
                     )
-            except HTTPException:
-                raise
-            except Exception as e:
-                raise HTTPException(
-                    status_code=401,
-                    detail=f"Stream server returned status 401 (Unauthorized). Error: {str(e)}"
-                )
         else:
             initial_response.close()
             raise HTTPException(
