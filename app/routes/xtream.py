@@ -405,8 +405,9 @@ async def get_movie_stream_url(
         })
     
     # NEW: Add segments-based m3u8 playlist URL (working alternative to direct m3u8)
+    # Use path-based URL ending with .m3u8 so ExoPlayer recognizes it as HLS
     base_url = f"{request.url.scheme}://{request.url.netloc}"
-    segments_m3u8_url = f"{base_url}/api/xtream/segments/m3u8?stream_id={vod_id}&type=movie&playlist_id={playlist_id}"
+    segments_m3u8_url = f"{base_url}/api/xtream/segments/{vod_id}.m3u8?type=movie&playlist_id={playlist_id}"
     # Insert after direct_source and container_ext, but before direct m3u8
     insert_index = len([u for u in stream_urls if u.get('is_direct') or (u.get('format') not in ['m3u8', 'ts'] and u.get('type') == 'video')])
     stream_urls.insert(insert_index, {
@@ -498,8 +499,9 @@ async def get_episode_stream_url(
         })
     
     # NEW: Add segments-based m3u8 playlist URL (working alternative to direct m3u8)
+    # Use path-based URL ending with .m3u8 so ExoPlayer recognizes it as HLS
     base_url = f"{request.url.scheme}://{request.url.netloc}"
-    segments_m3u8_url = f"{base_url}/api/xtream/segments/m3u8?stream_id={episode.get('id')}&type=series&playlist_id={playlist_id}"
+    segments_m3u8_url = f"{base_url}/api/xtream/segments/{episode.get('id')}.m3u8?type=series&playlist_id={playlist_id}"
     # Insert after direct_source and container_ext, but before direct m3u8
     insert_index = len([u for u in stream_urls if u.get('is_direct') or (u.get('format') not in ['m3u8', 'ts'] and u.get('type') == 'video')])
     stream_urls.insert(insert_index, {
@@ -788,12 +790,31 @@ async def proxy_stream(
         raise HTTPException(status_code=500, detail=f"Failed to fetch stream: {str(e)}")
 
 
+@router.get("/segments/{stream_id}.m3u8")
+async def get_segments_m3u8_path(
+    request: Request,
+    stream_id: str,
+    type: str = Query(..., description="Content type: 'series' or 'movie'"),
+    playlist_id: int = Query(0, description="Playlist ID (default: 0)")
+):
+    """Generate m3u8 playlist - path-based URL ending with .m3u8 for HLS detection"""
+    return await get_segments_m3u8_impl(request, stream_id, type, playlist_id)
+
 @router.get("/segments/m3u8")
 async def get_segments_m3u8(
     request: Request,
     stream_id: str = Query(..., description="Stream ID (episode or movie ID)"),
     type: str = Query(..., description="Content type: 'series' or 'movie'"),
     playlist_id: int = Query(0, description="Playlist ID (default: 0)")
+):
+    """Generate m3u8 playlist - query parameter version (for backwards compatibility)"""
+    return await get_segments_m3u8_impl(request, stream_id, type, playlist_id)
+
+async def get_segments_m3u8_impl(
+    request: Request,
+    stream_id: str,
+    type: str,
+    playlist_id: int
 ):
     """
     Generate an m3u8 playlist from TS segments
@@ -936,7 +957,10 @@ async def get_segments_m3u8(
         headers={
             'Content-Type': 'application/vnd.apple.mpegurl',
             'Access-Control-Allow-Origin': '*',
+            'Access-Control-Allow-Methods': 'GET, HEAD, OPTIONS',
+            'Access-Control-Allow-Headers': '*',
             'Cache-Control': 'no-cache',
+            'X-Content-Type-Options': 'nosniff',
         }
     )
 
