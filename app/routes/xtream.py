@@ -678,6 +678,38 @@ async def proxy_stream(
         elif initial_response.status_code == 200:
             # If we get 200 directly, we can use it
             initial_response.close()
+        elif initial_response.status_code == 401:
+            # 401 Unauthorized - try to get token by following redirects
+            # Some servers return 401 first, then redirect with token
+            initial_response.close()
+            # Try one more time with allow_redirects=True to see if we get a redirect
+            try:
+                redirect_response = service.session.get(
+                    url,
+                    stream=False,
+                    timeout=30,
+                    allow_redirects=True,
+                    headers=initial_headers
+                )
+                if redirect_response.status_code == 200:
+                    # Got 200 after redirect, check if final URL has token
+                    final_url = redirect_response.url
+                    if 'token=' in str(final_url):
+                        url = str(final_url)
+                    redirect_response.close()
+                else:
+                    redirect_response.close()
+                    raise HTTPException(
+                        status_code=401,
+                        detail=f"Stream server returned status 401 (Unauthorized). Authentication may be required."
+                    )
+            except HTTPException:
+                raise
+            except Exception as e:
+                raise HTTPException(
+                    status_code=401,
+                    detail=f"Stream server returned status 401 (Unauthorized). Error: {str(e)}"
+                )
         else:
             initial_response.close()
             raise HTTPException(
