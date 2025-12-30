@@ -709,6 +709,7 @@ async def proxy_stream(
                     extension = path_parts[-1].rsplit('.', 1)[1]
             
             # If we can extract stream_id, try to get tokenized URL
+            token_extracted = False
             if stream_id and stream_type:
                 try:
                     print(f"Attempting to extract token for {stream_type} stream_id={stream_id}")
@@ -716,39 +717,18 @@ async def proxy_stream(
                     if tokenized_url and 'token=' in tokenized_url:
                         print(f"✅ Successfully extracted token, using: {tokenized_url[:100]}...")
                         url = tokenized_url
+                        token_extracted = True
                     else:
-                        print(f"⚠️ Token extraction returned URL without token, using original")
+                        print(f"⚠️ Token extraction returned URL without token")
+                        print(f"DEBUG: tokenized_url value: {tokenized_url}")
                 except Exception as token_error:
-                    print(f"⚠️ Token extraction failed: {token_error}, will try redirect method")
-                    # Fall back to redirect method
-                    try:
-                        redirect_response = service.session.get(
-                            url,
-                            stream=False,
-                            timeout=30,
-                            allow_redirects=True,
-                            headers=initial_headers
-                        )
-                        if redirect_response.status_code == 200:
-                            final_url = redirect_response.url
-                            if 'token=' in str(final_url):
-                                url = str(final_url)
-                            redirect_response.close()
-                        else:
-                            redirect_response.close()
-                            raise HTTPException(
-                                status_code=401,
-                                detail=f"Stream server returned status 401 (Unauthorized). Authentication may be required."
-                            )
-                    except HTTPException:
-                        raise
-                    except Exception as e:
-                        raise HTTPException(
-                            status_code=401,
-                            detail=f"Stream server returned status 401 (Unauthorized). Error: {str(e)}"
-                        )
-            else:
-                # Can't extract stream_id, try redirect method
+                    print(f"⚠️ Token extraction failed: {token_error}")
+                    import traceback
+                    traceback.print_exc()
+            
+            # If token extraction didn't work, try redirect method
+            if not token_extracted:
+                print(f"DEBUG: Token extraction didn't work, trying redirect method...")
                 try:
                     redirect_response = service.session.get(
                         url,
@@ -757,24 +737,28 @@ async def proxy_stream(
                         allow_redirects=True,
                         headers=initial_headers
                     )
+                    print(f"DEBUG: Redirect response status: {redirect_response.status_code}")
+                    print(f"DEBUG: Redirect final URL: {redirect_response.url}")
                     if redirect_response.status_code == 200:
-                        final_url = redirect_response.url
-                        if 'token=' in str(final_url):
-                            url = str(final_url)
-                        redirect_response.close()
-                    else:
-                        redirect_response.close()
-                        raise HTTPException(
-                            status_code=401,
-                            detail=f"Stream server returned status 401 (Unauthorized). Authentication may be required."
-                        )
-                except HTTPException:
-                    raise
-                except Exception as e:
-                    raise HTTPException(
-                        status_code=401,
-                        detail=f"Stream server returned status 401 (Unauthorized). Error: {str(e)}"
-                    )
+                        final_url = str(redirect_response.url)
+                        if 'token=' in final_url:
+                            print(f"✅ Got token via redirect method: {final_url[:100]}...")
+                            url = final_url
+                            token_extracted = True
+                        else:
+                            print(f"⚠️ Redirect didn't include token")
+                    redirect_response.close()
+                except Exception as redirect_error:
+                    print(f"❌ Redirect method also failed: {redirect_error}")
+                    import traceback
+                    traceback.print_exc()
+            
+            # If still no token after all attempts, raise error
+            if not token_extracted:
+                raise HTTPException(
+                    status_code=401,
+                    detail=f"Stream server returned status 401 (Unauthorized). Could not extract authentication token after multiple attempts."
+                )
         else:
             initial_response.close()
             raise HTTPException(

@@ -131,14 +131,35 @@ class XtreamCodesService:
         # Get tokenized URL (m3u8 is standard for live TV)
         # Live TV also needs token extraction for authentication
         print(f"DEBUG get_live_stream_url: Starting token extraction for stream_id={stream_id}")
-        url_with_token = self.get_stream_url_with_token(stream_id, "live", "m3u8")
-        print(f"DEBUG get_live_stream_url: Token extraction result: {url_with_token[:200] if url_with_token else 'None'}...")
-        print(f"DEBUG get_live_stream_url: Has token in result: {url_with_token is not None and 'token=' in (url_with_token or '')}")
+        
+        # Try token extraction - if it fails, retry with different approach
+        url_with_token = None
+        max_retries = 2
+        
+        for attempt in range(max_retries):
+            try:
+                url_with_token = self.get_stream_url_with_token(stream_id, "live", "m3u8")
+                print(f"DEBUG get_live_stream_url: Attempt {attempt + 1} - Token extraction result: {url_with_token[:200] if url_with_token else 'None'}...")
+                
+                if url_with_token and 'token=' in url_with_token:
+                    print(f"✅ Token extracted successfully on attempt {attempt + 1}")
+                    break
+                else:
+                    print(f"⚠️ Attempt {attempt + 1} returned URL without token")
+                    if attempt < max_retries - 1:
+                        # Wait a bit before retry
+                        import time
+                        time.sleep(0.5)
+            except Exception as e:
+                print(f"⚠️ Attempt {attempt + 1} failed: {e}")
+                if attempt < max_retries - 1:
+                    import time
+                    time.sleep(0.5)
         
         # If token extraction failed or returned URL without token, use base URL
         if not url_with_token or 'token=' not in url_with_token:
-            print(f"⚠️ WARNING: Token extraction failed for live stream {stream_id}")
-            print(f"DEBUG get_live_stream_url: url_with_token value: {url_with_token}")
+            print(f"❌ WARNING: Token extraction failed for live stream {stream_id} after {max_retries} attempts")
+            print(f"DEBUG get_live_stream_url: Final url_with_token value: {url_with_token}")
             final_url = f"{self.base_url}/live/{self.username}/{self.password}/{stream_id}.m3u8"
             has_token = False
         else:
@@ -405,6 +426,9 @@ class XtreamCodesService:
             # Make GET request to get token via redirect
             # Note: Using GET (not HEAD) as some servers don't return Location header in HEAD requests
             print(f"DEBUG get_stream_url_with_token: Making request to {base_url}")
+            print(f"DEBUG get_stream_url_with_token: Session headers: {dict(self.session.headers)}")
+            
+            # Use a fresh request with explicit headers (don't rely on session headers)
             response = self.session.get(
                 base_url,
                 allow_redirects=False,
@@ -415,7 +439,11 @@ class XtreamCodesService:
                 }
             )
             print(f"DEBUG get_stream_url_with_token: Response status: {response.status_code}")
-            print(f"DEBUG get_stream_url_with_token: Response headers: {dict(response.headers)}")
+            print(f"DEBUG get_stream_url_with_token: Response headers keys: {list(response.headers.keys())}")
+            if 'Location' in response.headers:
+                print(f"DEBUG get_stream_url_with_token: Location header: {response.headers['Location'][:200]}...")
+            else:
+                print(f"DEBUG get_stream_url_with_token: No Location header in response")
             
             # If we get a redirect (302), extract token from Location header
             if response.status_code == 302:
