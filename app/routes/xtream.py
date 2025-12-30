@@ -3,6 +3,7 @@ Xtream Codes API Routes
 Routes for accessing content via Xtream Codes playlists
 """
 from fastapi import APIRouter, Query, HTTPException, Request, Response
+from starlette.requests import Request
 from fastapi.responses import StreamingResponse
 from typing import Optional, Literal
 import requests
@@ -389,6 +390,7 @@ async def get_movie_stream_url(
 
 @router.get("/series/episode/stream-url")
 async def get_episode_stream_url(
+    request: Request,
     series_id: str = Query(..., description="Series ID"),
     season_number: str = Query(..., description="Season number"),
     episode_number: str = Query(..., description="Episode number"),
