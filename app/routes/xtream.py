@@ -522,10 +522,13 @@ async def get_movie_stream_url(
     if not service:
         raise HTTPException(status_code=404, detail="No playlists available")
     
-    # Get movie info first (for container_extension)
+    # Get movie info first (includes movie_data with container_extension)
     vod_info = service.get_vod_info(vod_id)
     if not vod_info or not vod_info.get('info'):
         raise HTTPException(status_code=404, detail="Movie not found")
+    
+    # NOTE: container_extension is in movie_data (from get_vod_info response)
+    # get_movie_stream_url will automatically find it there
     
     # Get stream URL using the vod_id as stream_id
     # This will construct: {base_url}/movie/{username}/{password}/{vod_id}.{container_extension}

@@ -476,16 +476,42 @@ class XtreamCodesService:
             return []
         
         # Get container extension from movie info (can be mp4, mkv, avi, etc.)
+        # IMPORTANT: container_extension is in movie_data (from get_vod_info response),
+        # or in the movie object itself (from get_vod_streams list)
         container_ext = None
         if movie:
-            if 'info' in movie:
+            # First, check movie_data (from get_vod_info - most reliable)
+            movie_data = movie.get('movie_data', {})
+            if isinstance(movie_data, dict):
+                container_ext = movie_data.get('container_extension')
+                if container_ext:
+                    print(f"DEBUG: Found container_extension in movie_data: {container_ext}")
+            
+            # Fallback: check the movie object itself (from list)
+            if not container_ext:
+                container_ext = movie.get('container_extension')
+                if container_ext:
+                    print(f"DEBUG: Found container_extension in movie object: {container_ext}")
+            
+            # Last fallback: check info dict (though it usually doesn't have it)
+            if not container_ext and 'info' in movie:
                 movie_info = movie.get('info', {})
-                container_ext = movie_info.get('container_extension', '') or None
-            else:
-                container_ext = movie.get('container_extension', '') or None
+                container_ext = movie_info.get('container_extension')
+                if container_ext:
+                    print(f"DEBUG: Found container_extension in movie_info: {container_ext}")
+        
+        # Handle empty string, None, or whitespace - normalize to lowercase
+        if container_ext:
+            container_ext = str(container_ext).strip().lower()
+            if not container_ext:  # Empty after strip
+                container_ext = None
+        
+        # Debug: log what we're using
+        print(f"DEBUG: Using container_extension: {container_ext}")
         
         # If no container_extension provided, default to mp4 (fallback)
         if not container_ext:
+            print(f"DEBUG: No container_extension found, defaulting to 'mp4'")
             container_ext = 'mp4'
         
         # Construct direct URL: {base_url}/movie/{username}/{password}/{stream_id}.{container_extension}
@@ -522,7 +548,12 @@ class XtreamCodesService:
             return []
         
         # Get container extension from episode (can be mp4, mkv, avi, etc.)
-        container_ext = episode.get('container_extension', '') or None
+        container_ext = episode.get('container_extension')
+        # Handle empty string or None
+        if container_ext:
+            container_ext = str(container_ext).strip().lower()
+            if not container_ext:
+                container_ext = None
         
         # If no container_extension provided, default to mp4 (fallback)
         if not container_ext:
