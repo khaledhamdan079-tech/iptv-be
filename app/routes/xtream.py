@@ -7,8 +7,13 @@ from starlette.requests import Request
 from fastapi.responses import StreamingResponse
 from typing import Optional, Literal
 import requests
+import time
+from cachetools import TTLCache
 from app.services.xtream_codes import XtreamCodesService
 from app.services.maso_api import MasoAPIService
+
+# Cache for segment discovery results (5 minutes)
+_segments_cache = TTLCache(maxsize=100, ttl=300)
 
 router = APIRouter(prefix="/api/xtream", tags=["xtream"])
 
@@ -797,47 +802,95 @@ async def get_segments_m3u8(
     
     The segments are accessed from: /segments/{username}/{password}/{stream_id}/{segment_number}.ts
     """
+    import asyncio
+    import concurrent.futures
+    
     service = get_playlist_service(playlist_id)
     
     if not service:
         raise HTTPException(status_code=404, detail="No playlists available")
     
+    # Check cache first
+    cache_key = f"segments_{stream_id}_{playlist_id}"
+    if cache_key in _segments_cache:
+        cached_segments = _segments_cache[cache_key]
+        print(f"Using cached segments for {stream_id}: {len(cached_segments)} segments")
+    else:
+        cached_segments = None
+    
     # Segments use the same path for both series and movies
     segments_base = f"{service.base_url}/segments/{service.username}/{service.password}/{stream_id}"
     
-    # Discover available segments by checking segment URLs
-    segments = []
-    max_segments_to_check = 1000  # Reasonable limit
-    
-    print(f"Discovering segments for {stream_id}...")
-    
-    for i in range(max_segments_to_check):
-        segment_url = f"{segments_base}/{i}.ts"
+    # Use cached segments if available, otherwise discover
+    if cached_segments is not None:
+        segments = cached_segments
+    else:
+        # Use concurrent requests to discover segments faster
+    def check_segment(segment_num: int) -> Optional[int]:
+        """Check if a segment exists, return segment number if it does"""
+        segment_url = f"{segments_base}/{segment_num}.ts"
         try:
-            # Use HEAD request to check if segment exists (faster than GET)
-            response = service.session.head(segment_url, timeout=3, allow_redirects=True)
+            # Use HEAD request with shorter timeout (1 second)
+            response = service.session.head(segment_url, timeout=1, allow_redirects=True)
             if response.status_code == 200:
                 content_type = response.headers.get('Content-Type', '').lower()
                 # Accept video/mp2t, application/octet-stream, or video/*
                 if 'video' in content_type or 'mp2t' in content_type or 'octet-stream' in content_type:
-                    segments.append(i)
-                else:
-                    # If we get a non-video response, we've probably reached the end
+                    return segment_num
+            return None
+        except:
+            return None
+    
+    # Check segments in batches concurrently
+    segments = []
+    max_segments_to_check = 500  # Reduced limit for faster discovery
+    batch_size = 20  # Check 20 segments concurrently
+    
+    print(f"Discovering segments for {stream_id}...")
+    
+    # Use ThreadPoolExecutor for concurrent HEAD requests
+    with concurrent.futures.ThreadPoolExecutor(max_workers=batch_size) as executor:
+        # Check first batch to see if segments exist
+        first_batch = list(range(min(20, max_segments_to_check)))
+        futures = {executor.submit(check_segment, i): i for i in first_batch}
+        
+        found_any = False
+        for future in concurrent.futures.as_completed(futures, timeout=5):
+            result = future.result()
+            if result is not None:
+                segments.append(result)
+                found_any = True
+        
+        # If we found segments in first batch, continue checking in batches
+        if found_any:
+            # Sort segments found so far
+            segments.sort()
+            last_found = segments[-1]
+            
+            # Continue checking from where we left off
+            for batch_start in range(20, max_segments_to_check, batch_size):
+                batch_end = min(batch_start + batch_size, max_segments_to_check)
+                batch = list(range(batch_start, batch_end))
+                
+                futures = {executor.submit(check_segment, i): i for i in batch}
+                batch_found = False
+                
+                for future in concurrent.futures.as_completed(futures, timeout=3):
+                    result = future.result()
+                    if result is not None:
+                        segments.append(result)
+                        batch_found = True
+                
+                # If no segments found in this batch, we've probably reached the end
+                if not batch_found:
+                    # Check a few more to be sure
+                    for i in range(batch_end, min(batch_end + 10, max_segments_to_check)):
+                        result = check_segment(i)
+                        if result is not None:
+                            segments.append(result)
+                        else:
+                            break
                     break
-            elif response.status_code == 404:
-                # Segment doesn't exist, we've reached the end
-                break
-            else:
-                # Other status codes might indicate auth issues, but continue checking
-                # We'll stop if we get too many non-200 responses
-                if i > 10 and len(segments) == 0:
-                    # If first 10 segments all fail, probably no segments available
-                    break
-        except Exception as e:
-            # If request fails consistently, assume we've reached the end
-            if i > 10 and len(segments) == 0:
-                break
-            continue
     
     if not segments:
         raise HTTPException(
@@ -845,7 +898,13 @@ async def get_segments_m3u8(
             detail=f"No segments found for stream_id {stream_id}. The content may not have HLS segments available. Try using the mp4 format instead."
         )
     
-    print(f"Found {len(segments)} segments")
+    # Sort segments
+    segments.sort()
+    print(f"Found {len(segments)} segments (0-{segments[-1]})")
+    
+    # Cache the result
+    if cached_segments is None:
+        _segments_cache[cache_key] = segments
     
     # Generate m3u8 playlist
     m3u8_content = "#EXTM3U\n"
