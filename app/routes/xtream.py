@@ -203,14 +203,13 @@ async def search_vod(
     q: str = Query(..., description="Search query"),
     playlist_id: int = Query(0, description="Playlist ID (default: 0)")
 ):
-    """Search for VOD movies"""
+    """Search for VOD movies (uses cache when available for fast response)."""
+    import asyncio
     service = get_playlist_service(playlist_id)
-    
     if not service:
         raise HTTPException(status_code=404, detail="No playlists available")
-    
-    results = service.search_vod(q)
-    
+    loop = asyncio.get_event_loop()
+    results = await loop.run_in_executor(None, service.search_vod, q)
     return {
         "success": True,
         "query": q,
@@ -324,14 +323,13 @@ async def search_series(
     q: str = Query(..., description="Search query"),
     playlist_id: int = Query(0, description="Playlist ID (default: 0)")
 ):
-    """Search for series"""
+    """Search for series (uses cache when available for fast response)."""
+    import asyncio
     service = get_playlist_service(playlist_id)
-    
     if not service:
         raise HTTPException(status_code=404, detail="No playlists available")
-    
-    results = service.search_series(q)
-    
+    loop = asyncio.get_event_loop()
+    results = await loop.run_in_executor(None, service.search_series, q)
     return {
         "success": True,
         "query": q,

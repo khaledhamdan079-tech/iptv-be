@@ -12,6 +12,9 @@ from cachetools import TTLCache
 # Cache key format: "vod_{category_id}", "series_{category_id}", "live_{category_id}", or "live_categories"
 _content_cache = TTLCache(maxsize=100, ttl=600)  # Increased maxsize for live TV
 
+# Cache for search results (5 min) so repeated identical queries are instant
+_search_cache = TTLCache(maxsize=200, ttl=300)
+
 class XtreamCodesService:
     """Service for interacting with Xtream Codes API"""
     
@@ -338,48 +341,52 @@ class XtreamCodesService:
     
     def search_vod(self, query: str) -> List[Dict[str, Any]]:
         """
-        Search for VOD content (movies)
-        
-        Args:
-            query: Search query
+        Search for VOD content (movies).
+        Uses cached catalog and search-result cache for fast repeated searches.
         """
-        try:
-            url = self._get_api_url("get_vod_streams")
-            response = self.session.get(url, timeout=10)
-            response.raise_for_status()
-            all_vods = response.json()
-            
-            # Filter by query (case-insensitive)
-            query_lower = query.lower()
-            return [
-                vod for vod in all_vods
-                if query_lower in vod.get('name', '').lower() or 
-                   query_lower in vod.get('title', '').lower()
-            ]
-        except requests.exceptions.RequestException as e:
+        query_lower = query.lower().strip()
+        if not query_lower:
             return []
-    
+        cache_key = ("vod", self.base_url, query_lower)
+        if cache_key in _search_cache:
+            return _search_cache[cache_key]
+        try:
+            all_vods = self.get_vod_streams(category_id=None)
+            if not all_vods:
+                return []
+            results = [
+                vod for vod in all_vods
+                if query_lower in (vod.get("name") or "").lower()
+                or query_lower in (vod.get("title") or "").lower()
+            ]
+            _search_cache[cache_key] = results
+            return results
+        except requests.exceptions.RequestException:
+            return []
+
     def search_series(self, query: str) -> List[Dict[str, Any]]:
         """
-        Search for series
-        
-        Args:
-            query: Search query
+        Search for series.
+        Uses cached series list and search-result cache for fast repeated searches.
         """
+        query_lower = query.lower().strip()
+        if not query_lower:
+            return []
+        cache_key = ("series", self.base_url, query_lower)
+        if cache_key in _search_cache:
+            return _search_cache[cache_key]
         try:
-            url = self._get_api_url("get_series")
-            response = self.session.get(url, timeout=10)
-            response.raise_for_status()
-            all_series = response.json()
-            
-            # Filter by query (case-insensitive)
-            query_lower = query.lower()
-            return [
-                series for series in all_series
-                if query_lower in series.get('name', '').lower() or 
-                   query_lower in series.get('title', '').lower()
+            all_series = self.get_series(category_id=None)
+            if not all_series:
+                return []
+            results = [
+                s for s in all_series
+                if query_lower in (s.get("name") or "").lower()
+                or query_lower in (s.get("title") or "").lower()
             ]
-        except requests.exceptions.RequestException as e:
+            _search_cache[cache_key] = results
+            return results
+        except requests.exceptions.RequestException:
             return []
     
     def get_stream_url(self, stream_id: str, stream_type: str = "movie", extension: str = None) -> str:
