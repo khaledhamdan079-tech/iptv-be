@@ -6,6 +6,7 @@ from fastapi import APIRouter, Query, HTTPException, Request, Response
 from starlette.requests import Request
 from fastapi.responses import StreamingResponse
 from typing import Optional, Literal
+from urllib.parse import quote as url_quote
 import requests
 import time
 from cachetools import TTLCache
@@ -27,6 +28,23 @@ _PLAYLISTS_CACHE_TTL = 300  # 5 minutes
 _FALLBACK_XTREAM_PLAYLIST_URL = (
     "http://ddgo770.live:2095/get.php?username=had130&password=589548655&type=m3u_plus&output=ts"
 )
+
+
+def _playback_url_for_client(request: Request, direct_url: Optional[str], playlist_id: int) -> Optional[str]:
+    """
+    Many mobile players return 'authentication failed' on raw Xtream paths (/movie/.../id.ext)
+    without a token= query (HTTP 401). Route playback through our proxy so the server resolves
+    the 302 and streams with a token. Skip if URL already has a token or is already proxied.
+    """
+    if not direct_url:
+        return direct_url
+    if "/api/xtream/stream/proxy" in direct_url:
+        return direct_url
+    if "token=" in direct_url.lower():
+        return direct_url
+    base = str(request.base_url).rstrip("/")
+    return f"{base}/api/xtream/stream/proxy?url={url_quote(direct_url, safe='')}&playlist_id={playlist_id}"
+
 
 def get_maso_service():
     """Lazy-load MasoAPIService to avoid blocking startup"""
@@ -225,6 +243,7 @@ async def search_vod(
 
 @router.get("/vod/info")
 async def get_vod_info(
+    request: Request,
     vod_id: str = Query(..., description="VOD ID (stream_id)"),
     playlist_id: int = Query(0, description="Playlist ID (default: 0)"),
     include_stream_urls: bool = Query(False, description="Include stream URLs in response")
@@ -257,7 +276,8 @@ async def get_vod_info(
             recommended = stream_urls[0]
         
         result["stream_urls"] = stream_urls
-        result["recommended_url"] = recommended.get('url') if recommended else None
+        raw_rec = recommended.get("url") if recommended else None
+        result["recommended_url"] = _playback_url_for_client(request, raw_rec, playlist_id)
     
     return result
 
@@ -482,7 +502,7 @@ async def get_live_stream_url(
         "success": True,
         "stream_id": stream_id,
         "stream_urls": stream_urls,
-        "recommended_url": recommended.get('url'),
+        "recommended_url": _playback_url_for_client(request, recommended.get("url"), playlist_id),
         "recommended_format": recommended.get('format')
     }
 
@@ -554,7 +574,7 @@ async def get_movie_stream_url(
             "container_extension": movie_info.get('container_extension')
         },
         "stream_urls": stream_urls,
-        "recommended_url": recommended.get('url'),
+        "recommended_url": _playback_url_for_client(request, recommended.get("url"), playlist_id),
         "recommended_format": recommended.get('format')
     }
 
@@ -617,7 +637,7 @@ async def get_episode_stream_url(
             "container_extension": episode.get('container_extension')
         },
         "stream_urls": stream_urls,
-        "recommended_url": recommended.get('url'),
+        "recommended_url": _playback_url_for_client(request, recommended.get("url"), playlist_id),
         "recommended_format": recommended.get('format')
     }
 

@@ -5,7 +5,7 @@ Handles Xtream Codes API calls for IPTV content
 import requests
 from typing import Dict, List, Optional, Any
 import json
-from urllib.parse import urlparse, urljoin, urlencode
+from urllib.parse import urlparse, urljoin, urlencode, quote
 from cachetools import TTLCache
 
 # Cache for movies, series, and live TV lists (10 minutes = 600 seconds)
@@ -35,6 +35,11 @@ class XtreamCodesService:
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
             'Accept': 'application/json, */*',
         })
+    
+    @staticmethod
+    def _path_seg(value: str) -> str:
+        """Percent-encode a single URL path segment (Xtream user/pass/id may contain reserved chars)."""
+        return quote(str(value or ""), safe="")
     
     def _get_api_url(self, action: Optional[str] = None, **extra: Any) -> str:
         """Build Xtream Codes player_api.php URL with proper query encoding."""
@@ -173,7 +178,8 @@ class XtreamCodesService:
         if not url_with_token or 'token=' not in url_with_token:
             print(f"❌ WARNING: Token extraction failed for live stream {stream_id} after {max_retries} attempts")
             print(f"DEBUG get_live_stream_url: Final url_with_token value: {url_with_token}")
-            final_url = f"{self.base_url}/live/{self.username}/{self.password}/{stream_id}.m3u8"
+            u, p, sid = self._path_seg(self.username), self._path_seg(self.password), self._path_seg(str(stream_id))
+            final_url = f"{self.base_url}/live/{u}/{p}/{sid}.m3u8"
             has_token = False
         else:
             final_url = url_with_token
@@ -408,13 +414,14 @@ class XtreamCodesService:
             extension: File extension (m3u8, ts, etc.). If None, uses default or container_extension
         """
         ext = extension or self._get_extension()
+        u, p, sid = self._path_seg(self.username), self._path_seg(self.password), self._path_seg(str(stream_id))
         
         if stream_type == "movie":
-            return f"{self.base_url}/movie/{self.username}/{self.password}/{stream_id}.{ext}"
+            return f"{self.base_url}/movie/{u}/{p}/{sid}.{ext}"
         elif stream_type == "series":
-            return f"{self.base_url}/series/{self.username}/{self.password}/{stream_id}.{ext}"
+            return f"{self.base_url}/series/{u}/{p}/{sid}.{ext}"
         else:
-            return f"{self.base_url}/live/{self.username}/{self.password}/{stream_id}.{ext}"
+            return f"{self.base_url}/live/{u}/{p}/{sid}.{ext}"
     
     def get_stream_url_with_token(self, stream_id: str, stream_type: str = "movie", extension: str = None) -> Optional[str]:
         """
@@ -437,6 +444,12 @@ class XtreamCodesService:
         """
         # First, construct the base URL without token
         base_url = self.get_stream_url(stream_id, stream_type, extension)
+        stream_headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Accept': '*/*',
+            'Referer': self.base_url + '/',
+            'Origin': self.base_url,
+        }
         
         try:
             # Make GET request to get token via redirect
@@ -457,10 +470,7 @@ class XtreamCodesService:
                 base_url,
                 allow_redirects=False,
                 timeout=15,  # Increased from 5 to 15 seconds for slow servers
-                headers={
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                    'Accept': '*/*',
-                }
+                headers=stream_headers,
             )
             print(f"DEBUG get_stream_url_with_token: Response status: {response.status_code}")
             print(f"DEBUG get_stream_url_with_token: Response headers keys: {list(response.headers.keys())}")
@@ -512,10 +522,7 @@ class XtreamCodesService:
                         base_url,
                         allow_redirects=True,
                         timeout=15,
-                        headers={
-                            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                            'Accept': '*/*',
-                        }
+                        headers=stream_headers,
                     )
                     final_url = str(redirect_response.url)
                     print(f"DEBUG: After following redirects, final URL: {final_url[:200]}...")
@@ -536,10 +543,7 @@ class XtreamCodesService:
                         base_url,
                         allow_redirects=True,
                         timeout=15,
-                        headers={
-                            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                            'Accept': '*/*',
-                        }
+                        headers=stream_headers,
                     )
                     final_url = str(redirect_response.url)
                     if 'token=' in final_url:
@@ -644,14 +648,16 @@ class XtreamCodesService:
         # Then get token via 302 redirect (as APK does)
         # container_ext can be mp4, mkv, avi, or any other format the API provides
         url_with_token = self.get_stream_url_with_token(stream_id, "movie", container_ext)
+        u, p, sid = self._path_seg(self.username), self._path_seg(self.password), self._path_seg(str(stream_id))
+        resolved = url_with_token or f"{self.base_url}/movie/{u}/{p}/{sid}.{container_ext}"
         
         return [{
-            "url": url_with_token or f"{self.base_url}/movie/{self.username}/{self.password}/{stream_id}.{container_ext}",
+            "url": resolved,
             "format": container_ext,
             "type": "video",
             "quality": "original",
             "is_direct": False,
-            "has_token": url_with_token is not None and 'token=' in (url_with_token or '')
+            "has_token": "token=" in (resolved or ""),
         }]
     
     def get_episode_stream_url(self, episode: Dict[str, Any]) -> List[Dict[str, str]]:
@@ -689,14 +695,16 @@ class XtreamCodesService:
         # Then get token via 302 redirect (as APK does)
         # container_ext can be mp4, mkv, avi, or any other format the API provides
         url_with_token = self.get_stream_url_with_token(episode_id, "series", container_ext)
+        u, p, eid = self._path_seg(self.username), self._path_seg(self.password), self._path_seg(str(episode_id))
+        resolved = url_with_token or f"{self.base_url}/series/{u}/{p}/{eid}.{container_ext}"
         
         return [{
-            "url": url_with_token or f"{self.base_url}/series/{self.username}/{self.password}/{episode_id}.{container_ext}",
+            "url": resolved,
             "format": container_ext,
             "type": "video",
             "quality": "original",
             "is_direct": False,
-            "has_token": url_with_token is not None and 'token=' in (url_with_token or '')
+            "has_token": "token=" in (resolved or ""),
         }]
     
     def test_stream_url(self, url: str) -> Dict[str, Any]:
