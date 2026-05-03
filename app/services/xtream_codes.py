@@ -5,7 +5,7 @@ Handles Xtream Codes API calls for IPTV content
 import requests
 from typing import Dict, List, Optional, Any
 import json
-from urllib.parse import urlparse, urljoin
+from urllib.parse import urlparse, urljoin, urlencode
 from cachetools import TTLCache
 
 # Cache for movies, series, and live TV lists (10 minutes = 600 seconds)
@@ -36,16 +36,26 @@ class XtreamCodesService:
             'Accept': 'application/json, */*',
         })
     
-    def _get_api_url(self, action: str) -> str:
-        """Build Xtream Codes API URL"""
-        return f"{self.base_url}/player_api.php?username={self.username}&password={self.password}&action={action}"
+    def _get_api_url(self, action: Optional[str] = None, **extra: Any) -> str:
+        """Build Xtream Codes player_api.php URL with proper query encoding."""
+        params: Dict[str, Any] = {
+            "username": self.username,
+            "password": self.password,
+        }
+        if action:
+            params["action"] = action
+        for key, val in extra.items():
+            if val is not None and val != "":
+                params[key] = val
+        return f"{self.base_url}/player_api.php?{urlencode(params)}"
     
     def get_user_info(self) -> Dict[str, Any]:
         """
         Get user information and account status
         """
         try:
-            url = self._get_api_url("get_user_info")
+            # Same as typical player login: username + password only (no action).
+            url = self._get_api_url()
             response = self.session.get(url, timeout=10)
             response.raise_for_status()
             return response.json()
@@ -89,9 +99,10 @@ class XtreamCodesService:
             return _content_cache[cache_key]
         
         try:
-            url = self._get_api_url("get_live_streams")
-            if category_id:
-                url += f"&category_id={category_id}"
+            url = self._get_api_url(
+                "get_live_streams",
+                **({"category_id": category_id} if category_id else {}),
+            )
             response = self.session.get(url, timeout=30)  # Increased timeout for large lists
             response.raise_for_status()
             streams = response.json()
@@ -110,8 +121,7 @@ class XtreamCodesService:
             stream_id: Stream ID
         """
         try:
-            url = self._get_api_url("get_live_info")
-            url += f"&stream_id={stream_id}"
+            url = self._get_api_url("get_live_info", stream_id=stream_id)
             response = self.session.get(url, timeout=10)
             response.raise_for_status()
             return response.json()
@@ -192,8 +202,7 @@ class XtreamCodesService:
         try:
             if stream_id:
                 # Get short EPG for specific stream
-                url = self._get_api_url("get_short_epg")
-                url += f"&stream_id={stream_id}"
+                url = self._get_api_url("get_short_epg", stream_id=stream_id)
             else:
                 # Get all EPG data
                 url = self._get_api_url("get_short_epg")
@@ -237,9 +246,10 @@ class XtreamCodesService:
             return _content_cache[cache_key]
         
         try:
-            url = self._get_api_url("get_vod_streams")
-            if category_id:
-                url += f"&category_id={category_id}"
+            url = self._get_api_url(
+                "get_vod_streams",
+                **({"category_id": category_id} if category_id else {}),
+            )
             # Increased timeout for large data fetches (30 seconds)
             response = self.session.get(url, timeout=30)
             response.raise_for_status()
@@ -289,9 +299,10 @@ class XtreamCodesService:
             return _content_cache[cache_key]
         
         try:
-            url = self._get_api_url("get_series")
-            if category_id:
-                url += f"&category_id={category_id}"
+            url = self._get_api_url(
+                "get_series",
+                **({"category_id": category_id} if category_id else {}),
+            )
             # Increased timeout for large data fetches (30 seconds)
             response = self.session.get(url, timeout=30)
             response.raise_for_status()
@@ -315,8 +326,7 @@ class XtreamCodesService:
             series_id: Series ID
         """
         try:
-            url = self._get_api_url("get_series_info")
-            url += f"&series_id={series_id}"
+            url = self._get_api_url("get_series_info", series_id=series_id)
             response = self.session.get(url, timeout=10)
             response.raise_for_status()
             return response.json()
@@ -331,8 +341,7 @@ class XtreamCodesService:
             vod_id: VOD ID
         """
         try:
-            url = self._get_api_url("get_vod_info")
-            url += f"&vod_id={vod_id}"
+            url = self._get_api_url("get_vod_info", vod_id=vod_id)
             response = self.session.get(url, timeout=10)
             response.raise_for_status()
             return response.json()

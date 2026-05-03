@@ -23,6 +23,11 @@ _playlists_cache = None
 _playlists_cache_time = None
 _PLAYLISTS_CACHE_TTL = 300  # 5 minutes
 
+# Used when Maso /auth is unreachable or returns no playlist URLs (otherwise all Xtream routes fail).
+_FALLBACK_XTREAM_PLAYLIST_URL = (
+    "http://ddgo770.live:2095/get.php?username=had130&password=589548655&type=m3u_plus&output=ts"
+)
+
 def get_maso_service():
     """Lazy-load MasoAPIService to avoid blocking startup"""
     global _maso_service
@@ -63,10 +68,10 @@ def get_playlist_service(playlist_id: int = 0) -> Optional[XtreamCodesService]:
             if _playlists_cache is not None:
                 playlists = _playlists_cache
             else:
-                return None
+                playlists = []
     
     if not playlists:
-        return None
+        playlists = [{"url": _FALLBACK_XTREAM_PLAYLIST_URL}]
     
     if playlist_id >= len(playlists):
         playlist_id = 0
